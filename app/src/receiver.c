@@ -3,20 +3,10 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdlib.h>
-#include <SDL3/SDL_clipboard.h>
 
 #include "device_msg.h"
-#include "events.h"
 #include "util/log.h"
-#include "util/str.h"
 #include "util/thread.h"
-
-struct sc_uhid_output_task_data {
-    struct sc_uhid_devices *uhid_devices;
-    uint16_t id;
-    uint16_t size;
-    uint8_t *data;
-};
 
 bool
 sc_receiver_init(struct sc_receiver *receiver, sc_socket control_socket,
@@ -27,8 +17,6 @@ sc_receiver_init(struct sc_receiver *receiver, sc_socket control_socket,
     }
 
     receiver->control_socket = control_socket;
-    receiver->acksync = NULL;
-    receiver->uhid_devices = NULL;
 
     assert(cbs && cbs->on_ended);
     receiver->cbs = cbs;
@@ -43,118 +31,24 @@ sc_receiver_destroy(struct sc_receiver *receiver) {
 }
 
 static void
-task_set_clipboard(void *userdata) {
-    assert(sc_thread_is_main());
-
-    char *text = userdata;
-
-    char *current = SDL_GetClipboardText();
-    bool same = current && !strcmp(current, text);
-    SDL_free(current);
-    if (same) {
-        LOGD("Computer clipboard unchanged");
-    } else {
-        bool ok = SDL_SetClipboardText(text);
-        if (ok) {
-            LOGI("Device clipboard copied");
-        } else {
-            LOGE("Could not set clipboard: %s", SDL_GetError());
-        }
-    }
-
-    free(text);
-}
-
-static void
-task_uhid_output(void *userdata) {
-    assert(sc_thread_is_main());
-
-    struct sc_uhid_output_task_data *data = userdata;
-
-    sc_uhid_devices_process_hid_output(data->uhid_devices, data->id, data->data,
-                                       data->size);
-
-    free(data->data);
-    free(data);
-}
-
-static void
 process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
+    (void) receiver;
+
+    // PhoneEdge only sends input to the device: the clipboard is not
+    // synchronized (clipboard_autosync=false) and HID outputs (keyboard LEDs)
+    // are ignored, so just log and release the message.
     switch (msg->type) {
-        case DEVICE_MSG_TYPE_CLIPBOARD: {
-            // Take ownership of the text (do not destroy the msg)
-            char *text = msg->clipboard.text;
-
-            bool ok = sc_run_on_main_thread(task_set_clipboard, text, false);
-            if (!ok) {
-                LOGW("Could not post clipboard to main thread");
-                free(text);
-                return;
-            }
-
-            break;
-        }
+        case DEVICE_MSG_TYPE_CLIPBOARD:
         case DEVICE_MSG_TYPE_ACK_CLIPBOARD:
-            LOGD("Ack device clipboard sequence=%" PRIu64_,
-                 msg->ack_clipboard.sequence);
-
-            // This is a programming error to receive this message if there is
-            // no ACK synchronization mechanism
-            assert(receiver->acksync);
-
-            // Also check at runtime (do not trust the server)
-            if (!receiver->acksync) {
-                LOGE("Received unexpected ack");
-                return;
-            }
-
-            sc_acksync_ack(receiver->acksync, msg->ack_clipboard.sequence);
-            // No allocation to free in the msg
+            LOGD("Ignoring clipboard message from the device");
             break;
         case DEVICE_MSG_TYPE_UHID_OUTPUT:
-            if (sc_get_log_level() <= SC_LOG_LEVEL_VERBOSE) {
-                char *hex = sc_str_to_hex_string(msg->uhid_output.data,
-                                                 msg->uhid_output.size);
-                if (hex) {
-                    LOGV("UHID output [%" PRIu16 "] %s",
-                         msg->uhid_output.id, hex);
-                    free(hex);
-                } else {
-                    LOGV("UHID output [%" PRIu16 "] size=%" PRIu16,
-                         msg->uhid_output.id, msg->uhid_output.size);
-                }
-            }
-
-            if (!receiver->uhid_devices) {
-                LOGE("Received unexpected HID output message");
-                sc_device_msg_destroy(msg);
-                return;
-            }
-
-            struct sc_uhid_output_task_data *data = malloc(sizeof(*data));
-            if (!data) {
-                LOG_OOM();
-                return;
-            }
-
-            // It is guaranteed that these pointers will still be valid when
-            // the main thread will process them (the main thread will stop
-            // processing on exit, when everything gets deinitialized)
-            data->uhid_devices = receiver->uhid_devices;
-            data->id = msg->uhid_output.id;
-            data->data = msg->uhid_output.data; // take ownership
-            data->size = msg->uhid_output.size;
-
-            bool ok = sc_run_on_main_thread(task_uhid_output, data, false);
-            if (!ok) {
-                LOGW("Could not post UHID output to main thread");
-                free(data->data);
-                free(data);
-                return;
-            }
-
+            LOGV("Ignoring UHID output [%" PRIu16 "] size=%" PRIu16,
+                 msg->uhid_output.id, msg->uhid_output.size);
             break;
     }
+
+    sc_device_msg_destroy(msg);
 }
 
 static ssize_t

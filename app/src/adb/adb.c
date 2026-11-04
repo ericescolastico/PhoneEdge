@@ -758,3 +758,65 @@ sc_adb_get_device_sdk_version(struct sc_intr *intr, const char *serial) {
 
     return value;
 }
+
+char *
+sc_adb_shell_output(struct sc_intr *intr, const char *serial,
+                    const char *const args[], size_t max_len, unsigned flags) {
+    assert(serial);
+
+    const char *argv[16];
+    unsigned n = 0;
+    argv[n++] = sc_adb_get_executable();
+    argv[n++] = "-s";
+    argv[n++] = serial;
+    argv[n++] = "shell";
+    for (unsigned i = 0; args[i]; ++i) {
+        if (n >= 11) {
+            LOGE("Too many arguments for \"adb shell\"");
+            return NULL;
+        }
+        argv[n++] = args[i];
+    }
+    argv[n] = NULL;
+
+    sc_pipe pout;
+    sc_pid pid = sc_adb_execute_p(argv, flags, &pout);
+    if (pid == SC_PROCESS_NONE) {
+        LOGE("Could not execute \"adb shell %s\"", args[0]);
+        return NULL;
+    }
+
+    char *buf = malloc(max_len + 1);
+    if (!buf) {
+        LOG_OOM();
+        sc_pipe_close(pout);
+        sc_process_terminate(pid);
+        sc_process_wait(pid, true);
+        return NULL;
+    }
+
+    ssize_t r = sc_pipe_read_all_intr(intr, pid, pout, buf, max_len);
+    sc_pipe_close(pout);
+
+    bool truncated = r >= 0 && (size_t) r == max_len;
+    if (truncated) {
+        // The process may be blocked writing to the closed pipe: do not wait
+        // for a clean exit
+        sc_process_terminate(pid);
+        sc_process_wait(pid, true);
+    } else {
+        bool ok = process_check_success_intr(intr, pid, "adb shell", flags);
+        if (!ok) {
+            free(buf);
+            return NULL;
+        }
+    }
+
+    if (r == -1) {
+        free(buf);
+        return NULL;
+    }
+
+    buf[r] = '\0';
+    return buf;
+}

@@ -162,8 +162,9 @@ sc_cond_timedwait(sc_cond *cond, sc_mutex *mutex, sc_tick deadline) {
     atomic_store_explicit(&mutex->locker, sc_thread_get_id(),
                           memory_order_relaxed);
 #endif
-    // The deadline is reached on timeout
-    assert(signaled || sc_tick_now() >= deadline);
+    // On timeout the deadline is normally reached, but SDL may return up to
+    // about a millisecond early on Windows (timer resolution): callers loop on
+    // their own condition, so do not assert on it
     return signaled;
 }
 

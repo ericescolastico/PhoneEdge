@@ -1,0 +1,168 @@
+name: Build
+
+# - every push / pull request: unit tests (Linux) + Windows build, packaged as an artifact
+# - tag v*: the same zip is published as a GitHub Release
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SCRCPY_SERVER_VERSION: '5.0.1'
+  # Checksums of the official scrcpy v5.0.1 release assets
+  # (https://github.com/Genymobile/scrcpy/releases/tag/v5.0.1, SHA256SUMS.txt)
+  SCRCPY_SERVER_SHA256: 764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536
+  SCRCPY_WIN64_ZIP_SHA256: b12a2c4ee8be317422451fc7dcf8ee20a71b5ea7ef9ad73ddd825a25316227a5
+  SDL_VERSION: '3.2.20'
+
+jobs:
+  test-linux:
+    name: Unit tests (Linux, ASan/UBSan) and end-to-end with a fake phone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SDL3
+        id: cache-sdl
+        uses: actions/cache@v4
+        with:
+          path: ~/sdl3-prefix
+          key: sdl3-${{ env.SDL_VERSION }}-linux-v2
+
+      - name: Build SDL3 (Ubuntu does not ship it)
+        if: steps.cache-sdl.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+          curl -fsSL -o sdl.tar.gz \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
+          mkdir sdl-src && tar xf sdl.tar.gz -C sdl-src --strip-components=1
+          cmake -S sdl-src -B sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/sdl3-prefix" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+            -DSDL_UNIX_CONSOLE_BUILD=ON
+          cmake --build sdl-build
+          cmake --install sdl-build
+
+      - name: Install meson
+        run: sudo apt-get install -y --no-install-recommends meson ninja-build
+
+      - name: Configure (debug + sanitizers)
+        run: |
+          export PKG_CONFIG_PATH="$HOME/sdl3-prefix/lib/pkgconfig:$HOME/sdl3-prefix/lib/x86_64-linux-gnu/pkgconfig"
+          meson setup build -Db_sanitize=address,undefined -Db_lundef=false
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Unit tests
+        run: |
+          export LD_LIBRARY_PATH="$HOME/sdl3-prefix/lib:$HOME/sdl3-prefix/lib/x86_64-linux-gnu"
+          meson test -C build --print-errorlogs
+
+      - name: End-to-end (fake adb + fake server, no phone)
+        run: |
+          export LD_LIBRARY_PATH="$HOME/sdl3-prefix/lib:$HOME/sdl3-prefix/lib/x86_64-linux-gnu"
+          python3 tests/e2e/run_e2e.py build/app/phoneedge "$LD_LIBRARY_PATH"
+
+  build-windows:
+    name: Windows x64 build and package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-sdl3
+            unzip
+            zip
+            curl
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release --strip -Dportable=true
+          ninja -C build
+
+      - name: Unit tests (debug build, runs on Windows)
+        run: |
+          meson setup build-debug --buildtype=debug
+          ninja -C build-debug
+          meson test -C build-debug --print-errorlogs
+
+      - name: Download scrcpy-server and adb (official scrcpy v5.0.1 release)
+        run: |
+          base="https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_SERVER_VERSION}"
+          curl -fsSL -o scrcpy-server "$base/scrcpy-server-v${SCRCPY_SERVER_VERSION}"
+          curl -fsSL -o scrcpy-win64.zip "$base/scrcpy-win64-v${SCRCPY_SERVER_VERSION}.zip"
+          echo "$SCRCPY_SERVER_SHA256  scrcpy-server" | sha256sum -c -
+          echo "$SCRCPY_WIN64_ZIP_SHA256  scrcpy-win64.zip" | sha256sum -c -
+          unzip -q scrcpy-win64.zip -d upstream
+
+      - name: Package
+        run: |
+          name="PhoneEdge-${GITHUB_REF_NAME//\//-}-win64"
+          rm -rf dist && mkdir -p "dist/$name"
+          cp build/app/phoneedge.exe "dist/$name/"
+          cp scrcpy-server "dist/$name/scrcpy-server"
+          # adb (and the two DLLs it needs), unmodified, from the official release
+          cp upstream/scrcpy-win64-v${SCRCPY_SERVER_VERSION}/adb.exe \
+             upstream/scrcpy-win64-v${SCRCPY_SERVER_VERSION}/AdbWinApi.dll \
+             upstream/scrcpy-win64-v${SCRCPY_SERVER_VERSION}/AdbWinUsbApi.dll "dist/$name/"
+          # runtime DLLs of the MSYS2 build (SDL3 and whatever it links)
+          ldd build/app/phoneedge.exe | awk '/mingw64/ {print $3}' | xargs -I{} cp {} "dist/$name/"
+          cp packaging/phoneedge.ini "dist/$name/phoneedge.ini"
+          cp README.md LICENSE NOTICE "dist/$name/"
+          cp packaging/LEIAME.txt packaging/teste-celular.txt "dist/$name/"
+          (cd dist && zip -qr "$name.zip" "$name")
+          echo "ZIP_NAME=$name.zip" >> "$GITHUB_ENV"
+          ls -la "dist/$name" dist
+
+      - name: Smoke test of the package
+        run: |
+          cd "dist/${ZIP_NAME%.zip}"
+          ./phoneedge.exe --version
+          ./phoneedge.exe --help
+          ./adb.exe version
+          test -f ./teste-celular.txt && test -f ./phoneedge.ini && test -f ./scrcpy-server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneEdge-win64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhoneEdge-win64
+          path: dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PhoneEdge $GITHUB_REF_NAME" \
+            --notes "Protótipo do PhoneEdge. Veja o README.md dentro do zip para o passo a passo de teste no Windows + Galaxy S22." \
+            --prerelease

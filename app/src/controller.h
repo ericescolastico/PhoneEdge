@@ -7,9 +7,9 @@
 
 #include "control_msg.h"
 #include "receiver.h"
-#include "util/acksync.h"
 #include "util/net.h"
 #include "util/thread.h"
+#include "util/tick.h"
 #include "util/vecdeque.h"
 
 struct sc_control_msg_queue SC_VECDEQUE(struct sc_control_msg);
@@ -48,11 +48,6 @@ sc_controller_init(struct sc_controller *controller, sc_socket control_socket,
                    void *cbs_userdata);
 
 void
-sc_controller_configure(struct sc_controller *controller,
-                        struct sc_acksync *acksync,
-                        struct sc_uhid_devices *uhid_devices);
-
-void
 sc_controller_destroy(struct sc_controller *controller);
 
 bool
@@ -67,6 +62,11 @@ sc_controller_join(struct sc_controller *controller);
 bool
 sc_controller_push_msg(struct sc_controller *controller,
                        const struct sc_control_msg *msg);
+
+// Wait until the queue of messages is empty (they are written to the socket by
+// the controller thread), at most `timeout`. Return false on timeout.
+bool
+sc_controller_wait_idle(struct sc_controller *controller, sc_tick timeout);
 
 void
 sc_controller_resize_display(struct sc_controller *controller,

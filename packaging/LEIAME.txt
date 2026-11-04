@@ -1,0 +1,15 @@
+PhoneEdge - protótipo (fork do scrcpy, Apache 2.0)
+
+Leia o README.md desta pasta: tem o passo a passo de teste no Windows + Galaxy S22.
+Resumo:
+
+  1. No celular: Opções do desenvolvedor > Depuração USB (e, se o Auto Blocker estiver ativo,
+     desative "Bloquear comandos por cabo USB"). Aceite a autorização de depuração no celular.
+  2. Neste PC, abra um terminal NESTA pasta e rode:  .\adb.exe devices
+     (o celular deve aparecer como "device"; se não, instale o driver USB da Samsung).
+  3. Teste sem celular:     .\phoneedge.exe --dry-run
+     Teste com celular:     .\phoneedge.exe --stay-awake --debug-log log.txt
+  4. Empurre o mouse contra a borda direita do monitor. Volta pelo outro lado do celular,
+     ou com Ctrl+Alt+Pause (atalho de emergência, sempre funciona).
+
+Se algo falhar, envie o arquivo log.txt.

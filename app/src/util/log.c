@@ -7,7 +7,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <libavutil/log.h>
+#include <SDL3/SDL_timer.h>
 
 static SDL_LogPriority
 log_level_sc_to_sdl(enum sc_log_level level) {
@@ -91,43 +91,6 @@ sc_log_windows_error(const char *prefix, int error) {
 }
 #endif
 
-static SDL_LogPriority
-sdl_priority_from_av_level(int level) {
-    switch (level) {
-        case AV_LOG_PANIC:
-        case AV_LOG_FATAL:
-            return SDL_LOG_PRIORITY_CRITICAL;
-        case AV_LOG_ERROR:
-            return SDL_LOG_PRIORITY_ERROR;
-        case AV_LOG_WARNING:
-            return SDL_LOG_PRIORITY_WARN;
-        case AV_LOG_INFO:
-            return SDL_LOG_PRIORITY_INFO;
-    }
-    // do not forward others, which are too verbose
-    return 0;
-}
-
-static void
-sc_av_log_callback(void *avcl, int level, const char *fmt, va_list vl) {
-    (void) avcl;
-    SDL_LogPriority priority = sdl_priority_from_av_level(level);
-    if (priority == 0) {
-        return;
-    }
-
-    size_t fmt_len = strlen(fmt);
-    char *local_fmt = malloc(fmt_len + 10);
-    if (!local_fmt) {
-        LOG_OOM();
-        return;
-    }
-    memcpy(local_fmt, "[FFmpeg] ", 9); // do not write the final '\0'
-    memcpy(local_fmt + 9, fmt, fmt_len + 1); // include '\0'
-    SDL_LogMessageV(SDL_LOG_CATEGORY_CUSTOM, priority, local_fmt, vl);
-    free(local_fmt);
-}
-
 static const char *const sc_sdl_log_priority_names[SDL_LOG_PRIORITY_COUNT] = {
     [SDL_LOG_PRIORITY_VERBOSE] = "VERBOSE",
     [SDL_LOG_PRIORITY_DEBUG] = "DEBUG",
@@ -136,6 +99,8 @@ static const char *const sc_sdl_log_priority_names[SDL_LOG_PRIORITY_COUNT] = {
     [SDL_LOG_PRIORITY_ERROR] = "ERROR",
     [SDL_LOG_PRIORITY_CRITICAL] = "CRITICAL",
 };
+
+static FILE *log_file;
 
 static void SDLCALL
 sc_sdl_log_print(void *userdata, int category, SDL_LogPriority priority,
@@ -147,6 +112,35 @@ sc_sdl_log_print(void *userdata, int category, SDL_LogPriority priority,
     assert(priority < SDL_LOG_PRIORITY_COUNT);
     const char *prio_name = sc_sdl_log_priority_names[priority];
     fprintf(out, "%s: %s\n", prio_name, message);
+
+    if (log_file) {
+        // Timestamp: milliseconds since the start, to correlate events
+        fprintf(log_file, "[%8llu ms] %s: %s\n",
+                (unsigned long long) SDL_GetTicks(), prio_name, message);
+        // Flush every line: the log must survive a crash or a kill
+        fflush(log_file);
+    }
+}
+
+bool
+sc_log_set_file(const char *path) {
+    FILE *f = fopen(path, "a");
+    if (!f) {
+        return false;
+    }
+    if (log_file) {
+        fclose(log_file);
+    }
+    log_file = f;
+    return true;
+}
+
+void
+sc_log_close_file(void) {
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
+    }
 }
 
 void
@@ -156,6 +150,4 @@ sc_log_configure(void) {
 #endif
 
     SDL_SetLogOutputFunction(sc_sdl_log_print, NULL);
-    // Redirect FFmpeg logs to SDL logs
-    av_log_set_callback(sc_av_log_callback);
 }

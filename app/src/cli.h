@@ -7,18 +7,11 @@
 
 #include "options.h"
 
-enum sc_pause_on_exit {
-    SC_PAUSE_ON_EXIT_UNDEFINED,
-    SC_PAUSE_ON_EXIT_TRUE,
-    SC_PAUSE_ON_EXIT_FALSE,
-    SC_PAUSE_ON_EXIT_IF_ERROR,
-};
-
 struct scrcpy_cli_args {
     struct scrcpy_options opts;
     bool help;
     bool version;
-    enum sc_pause_on_exit pause_on_exit;
+    bool pause_on_exit;
 };
 
 void
@@ -27,9 +20,9 @@ scrcpy_print_usage(const char *arg0);
 bool
 scrcpy_parse_args(struct scrcpy_cli_args *args, int argc, char *argv[]);
 
-#ifdef SC_TEST
+// Apply the content of a .ini file to the options (exposed for the tests)
 bool
-sc_parse_shortcut_mods(const char *s, uint8_t *shortcut_mods);
-#endif
+scrcpy_load_config_text(struct scrcpy_options *opts, const char *text,
+                        char *err, unsigned errlen);
 
 #endif

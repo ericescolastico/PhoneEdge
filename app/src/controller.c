@@ -2,7 +2,10 @@
 
 #include <assert.h>
 
+#include <SDL3/SDL_timer.h>
+
 #include "util/log.h"
+#include "util/tick.h"
 
 // Drop droppable events above this limit
 #define SC_CONTROL_MSG_QUEUE_LIMIT 60
@@ -67,14 +70,6 @@ sc_controller_init(struct sc_controller *controller, sc_socket control_socket,
     controller->cbs_userdata = cbs_userdata;
 
     return true;
-}
-
-void
-sc_controller_configure(struct sc_controller *controller,
-                        struct sc_acksync *acksync,
-                        struct sc_uhid_devices *uhid_devices) {
-    controller->receiver.acksync = acksync;
-    controller->receiver.uhid_devices = uhid_devices;
 }
 
 void
@@ -248,4 +243,23 @@ void
 sc_controller_join(struct sc_controller *controller) {
     sc_thread_join(&controller->thread, NULL);
     sc_receiver_join(&controller->receiver);
+}
+
+bool
+sc_controller_wait_idle(struct sc_controller *controller, sc_tick timeout) {
+    sc_tick deadline = sc_tick_now() + timeout;
+    for (;;) {
+        sc_mutex_lock(&controller->mutex);
+        bool empty = sc_vecdeque_is_empty(&controller->queue);
+        sc_mutex_unlock(&controller->mutex);
+        if (empty) {
+            // the last message may still be in the socket buffer, being sent
+            SDL_Delay(15);
+            return true;
+        }
+        if (sc_tick_now() >= deadline) {
+            return false;
+        }
+        SDL_Delay(2);
+    }
 }

@@ -224,7 +224,10 @@ sc_hid_mouse_generate_input_from_scroll(struct sc_hid_mouse *hid,
     }
 
     uint8_t *data = hid_input->data;
-    data[0] = 0; // buttons state irrelevant (and unknown)
+    // The HID report carries the whole button state: a scroll while a button
+    // is held must not release it on the device (callers that do not know the
+    // buttons pass 0)
+    data[0] = sc_hid_buttons_from_buttons_state(event->buttons_state);
     data[1] = 0; // no x motion
     data[2] = 0; // no y motion
     data[3] = vscroll;
