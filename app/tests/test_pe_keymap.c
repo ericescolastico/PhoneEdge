@@ -147,9 +147,20 @@ static void test_hotkey_parse(void) {
     assert(hk.mods == 0);
     assert(pe_hotkey_parse("f9", &hk, err, sizeof(err)));
 
-    // ... but not letters
+    // ... but not letters, even with Shift only (it just capitalizes)
     assert(!pe_hotkey_parse("a", &hk, err, sizeof(err)));
     assert(strstr(err, "modifier"));
+    assert(!pe_hotkey_parse("shift+a", &hk, err, sizeof(err)));
+    assert(!pe_hotkey_parse("shift+5", &hk, err, sizeof(err)));
+    assert(pe_hotkey_parse("shift+f5", &hk, err, sizeof(err)));
+    assert(pe_hotkey_parse("ctrl+shift+a", &hk, err, sizeof(err)));
+
+    // reserved by Windows: the hook would never see them
+    assert(!pe_hotkey_parse("ctrl+alt+delete", &hk, err, sizeof(err)));
+    assert(strstr(err, "reserved"));
+    assert(!pe_hotkey_parse("win+l", &hk, err, sizeof(err)));
+    assert(!pe_hotkey_parse("win+shift+l", &hk, err, sizeof(err)));
+    assert(pe_hotkey_parse("ctrl+delete", &hk, err, sizeof(err)));
     assert(!pe_hotkey_parse("ctrl+alt", &hk, err, sizeof(err)));
     assert(strstr(err, "no main key"));
     assert(!pe_hotkey_parse("ctrl+a+b", &hk, err, sizeof(err)));

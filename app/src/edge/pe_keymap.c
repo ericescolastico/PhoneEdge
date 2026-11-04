@@ -292,8 +292,20 @@ pe_hotkey_parse(const char *s, struct pe_hotkey *out, char *err,
         set_err(err, errlen, "hotkey has no main key", s);
         return false;
     }
-    if (!hk.mods && !key_allowed_without_modifier(hk.key)) {
-        set_err(err, errlen, "hotkey needs at least one modifier", s);
+    // Shift alone only capitalizes a letter: not a modifier for a shortcut
+    if (!(hk.mods & ~PE_MOD_SHIFT) && !key_allowed_without_modifier(hk.key)) {
+        set_err(err, errlen,
+                "hotkey needs a modifier other than Shift (Ctrl, Alt or Win)",
+                s);
+        return false;
+    }
+    // These are intercepted by Windows (secure attention sequence, lock
+    // screen): the hook would never see them
+    if (((hk.mods & (PE_MOD_CTRL | PE_MOD_ALT)) == (PE_MOD_CTRL | PE_MOD_ALT)
+            && hk.key == 0x4C) // Delete
+            || ((hk.mods & PE_MOD_GUI) && hk.key == 0x0F)) { // L
+        set_err(err, errlen,
+                "this shortcut is reserved by Windows and cannot be used", s);
         return false;
     }
 

@@ -83,6 +83,12 @@ static void test_set_errors(void) {
            == PE_SET_INVALID_VALUE);
     assert(pe_config_set(&c, "pointer_scale", "0", err, sizeof(err))
            == PE_SET_INVALID_VALUE);
+    // below 0.25 an entry would need too many reports
+    assert(pe_config_set(&c, "pointer_scale", "0.1", err, sizeof(err))
+           == PE_SET_INVALID_VALUE);
+    assert(strstr(err, "0.25"));
+    assert(pe_config_set(&c, "return_inset", "1", err, sizeof(err))
+           == PE_SET_INVALID_VALUE);
     assert(pe_config_set(&c, "pointer_scale", "nan", err, sizeof(err))
            == PE_SET_INVALID_VALUE);
     assert(pe_config_set(&c, "pointer_scale", "1.5x", err, sizeof(err))
@@ -174,6 +180,36 @@ static void test_ini_errors(void) {
                         sizeof(err)));
 }
 
+static void test_ini_long_comment_lines(void) {
+    struct ini_ctx ctx = {0};
+    pe_config_defaults(&ctx.cfg);
+    char err[200];
+
+    // a comment longer than the line buffer must not break the file
+    char text[2048];
+    int n = snprintf(text, sizeof(text), "# ");
+    for (int i = 0; i < 700; ++i) {
+        text[n++] = 'x';
+    }
+    n += snprintf(text + n, sizeof(text) - n, "\n   ; ");
+    for (int i = 0; i < 700; ++i) {
+        text[n++] = 'y';
+    }
+    snprintf(text + n, sizeof(text) - n, "\nedge = top\n");
+    assert(pe_ini_parse(text, ini_cb, &ctx, err, sizeof(err)));
+    assert(ctx.cfg.edge == PE_SIDE_TOP);
+
+    // ... but a long key/value line is still an error
+    char bad[1024];
+    n = snprintf(bad, sizeof(bad), "edge = ");
+    for (int i = 0; i < 600; ++i) {
+        bad[n++] = 'z';
+    }
+    bad[n] = '\0';
+    assert(!pe_ini_parse(bad, ini_cb, &ctx, err, sizeof(err)));
+    assert(strstr(err, "too long"));
+}
+
 static void test_oriented_size(void) {
     struct pe_config c;
     pe_config_defaults(&c);
@@ -208,6 +244,7 @@ int main(int argc, char *argv[]) {
     test_set_errors();
     test_ini();
     test_ini_errors();
+    test_ini_long_comment_lines();
     test_oriented_size();
     test_sides();
     return 0;

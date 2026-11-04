@@ -31,6 +31,13 @@ res_push(struct pe_result *res, enum pe_action_type type) {
     return a;
 }
 
+// Milliseconds elapsed since `then`, 0 if the clock went backwards: a
+// timestamp older than a previous one must never wrap around
+static uint64_t
+elapsed_ms(uint64_t now, uint64_t then) {
+    return now >= then ? now - then : 0;
+}
+
 static float
 clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -244,9 +251,12 @@ static void
 compute_pc_point(const struct pe_edge *e, float ratio, int32_t *x,
                  int32_t *y) {
     const struct pe_rect *r = &e->monitors[e->selected];
-    int inset = e->cfg.return_inset;
     int w = r->right - 1 - r->left;
     int h = r->bottom - 1 - r->top;
+    // Reappear clearly away from the edge zone, or the cursor would cross
+    // again at once, and always inside the monitor
+    int inset = MAX_INT(e->cfg.return_inset, PE_EDGE_ZONE + 1);
+    inset = MIN_INT(inset, MIN_INT(w, h) / 2);
     int along_x = r->left + (int) lroundf(ratio * (float) w);
     int along_y = r->top + (int) lroundf(ratio * (float) h);
     switch (e->cfg.edge) {
@@ -361,8 +371,7 @@ enter_phone(struct pe_edge *e, uint64_t now, float ratio,
     memset(e->phone_keys, 0, sizeof(e->phone_keys));
     e->phone_hid_mods = 0;
     e->hotkey_key_down = false;
-    // Keys held now are known by Windows: their release must reach it
-    memcpy(e->pc_keys_at_entry, e->pc_keys, sizeof(e->pc_keys));
+    // (the keys Windows saw going down are tracked in `win_down`)
 
     res->swallow = true;
     struct pe_action *a = res_push(res, PE_ACT_ENTER_PHONE);
@@ -415,6 +424,7 @@ enter_phone(struct pe_edge *e, uint64_t now, float ratio,
     int reports = (int) ceilf((float) longest
                               / ((float) PE_HID_MAX * cfg->pointer_scale))
                 + cfg->anchor_extra;
+    reports = MIN_INT(reports, PE_MAX_ANCHOR_REPORTS);
     int sx = cx == 0 ? -PE_HID_MAX : PE_HID_MAX;
     int sy = cy == 0 ? -PE_HID_MAX : PE_HID_MAX;
     for (int i = 0; i < reports; ++i) {
@@ -446,7 +456,8 @@ may_enter(const struct pe_edge *e, uint64_t now) {
     if (e->pc_buttons) {
         return false;
     }
-    if (e->has_left && now - e->leave_time < (uint64_t) e->cfg.reenter_ms) {
+    if (e->has_left
+            && elapsed_ms(now, e->leave_time) < (uint64_t) e->cfg.reenter_ms) {
         return false;
     }
     return true;
@@ -478,9 +489,14 @@ pe_edge_on_mouse_move(struct pe_edge *e, uint64_t now, int dx, int dy,
         if (out == 0) {
             return;
         }
+        if (!may_enter(e, now)) {
+            // Entry is blocked (button held, cooldown...): the push must be
+            // rebuilt after that, or a tiny nudge would cross later
+            e->edge_push_acc = 0;
+            return;
+        }
         e->edge_push_acc += (float) out;
-        if (e->edge_push_acc >= (float) e->cfg.edge_push
-                && may_enter(e, now)) {
+        if (e->edge_push_acc >= (float) e->cfg.edge_push) {
             enter_phone(e, now, ratio, res);
         }
         return;
@@ -505,12 +521,13 @@ pe_edge_on_mouse_move(struct pe_edge *e, uint64_t now, int dx, int dy,
 // pointer pushed enough against the edge facing it. Does not reset `res`.
 static void
 tick_phone(struct pe_edge *e, uint64_t now, struct pe_result *res) {
-    if (now - e->last_flush < (uint64_t) e->cfg.flush_ms) {
+    if (elapsed_ms(now, e->last_flush) < (uint64_t) e->cfg.flush_ms) {
         return;
     }
     flush_pending(e, now, res, true);
 
-    bool guard_over = now - e->enter_time >= (uint64_t) e->cfg.enter_guard_ms;
+    bool guard_over =
+        elapsed_ms(now, e->enter_time) >= (uint64_t) e->cfg.enter_guard_ms;
     if (guard_over && e->leave_push > 0
             && e->leave_push >= (float) e->cfg.leave_margin) {
         leave_phone(e, now, PE_LEAVE_EDGE, res);
@@ -567,7 +584,6 @@ pe_edge_on_button(struct pe_edge *e, uint64_t now, uint8_t button, bool down,
 void
 pe_edge_on_wheel(struct pe_edge *e, uint64_t now, bool horizontal, int delta,
                  struct pe_result *res) {
-    (void) now;
     res_init(res);
 
     if (e->state != PE_STATE_PHONE_ACTIVE) {
@@ -575,6 +591,8 @@ pe_edge_on_wheel(struct pe_edge *e, uint64_t now, bool horizontal, int delta,
     }
 
     res->swallow = true;
+    // Keep the order: scroll where the pointer is
+    flush_pending(e, now, res, true);
     float notches = (float) delta / 120.0f * e->cfg.wheel_scale;
     struct pe_action *a = res_push(res, PE_ACT_PHONE_WHEEL);
     if (a) {
@@ -594,62 +612,81 @@ phys_hid_mods(const struct pe_edge *e) {
     return mods;
 }
 
-void
-pe_edge_on_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
-               struct pe_result *res) {
-    res_init(res);
-
-    if (e->state == PE_STATE_DISABLED || sc == 0) {
-        return;
-    }
-
+// The core of pe_edge_on_key(): decide about one key event. The caller records
+// what Windows will see.
+static void
+handle_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
+           struct pe_result *res) {
     // `pc_keys` is the physical state of the keyboard, whatever the state
     bool repeat = down && e->pc_keys[sc];
     e->pc_keys[sc] = down;
 
     const struct pe_hotkey *hk = &e->cfg.hotkey;
 
-    // Emergency shortcut: always handled, whatever the state
+    // Emergency shortcut: always handled, whatever the state. It fires on every
+    // press (even auto-repeats) because some keys (Pause) may never report
+    // their release, and it must not depend on stale bookkeeping.
     if (sc == hk->key) {
         if (down) {
             uint8_t mods = pe_keymap_generic_mods(phys_hid_mods(e));
-            if (!repeat && (mods & hk->mods) == hk->mods) {
+            if ((mods & hk->mods) == hk->mods) {
                 e->hotkey_key_down = true;
+                // Do not keep a "held" state that a missing release would
+                // make permanent
+                e->pc_keys[sc] = false;
                 res->swallow = true;
                 if (e->state == PE_STATE_PHONE_ACTIVE) {
                     leave_phone(e, now, PE_LEAVE_HOTKEY, res);
                 }
                 return;
             }
+            e->hotkey_key_down = false; // pressed without the modifiers
         } else if (e->hotkey_key_down) {
             e->hotkey_key_down = false;
-            res->swallow = true;
-            return;
-        }
-        if (e->hotkey_key_down) {
-            res->swallow = true; // repeat of the shortcut key
+            // The shortcut press was swallowed, unless Windows already saw an
+            // earlier press of this key
+            res->swallow = !e->win_down[sc];
             return;
         }
     }
 
-    if (e->state == PE_STATE_PC_ACTIVE) {
+    // Windows saw this key going down (before the phone had the control, or
+    // without the modifiers of a shortcut): it must see it going up, and the
+    // repeats are of no concern
+    if (e->win_down[sc]) {
+        if (!down) {
+            res->swallow = false;
+        } else {
+            // auto-repeat: the PC keeps it while it has the control
+            res->swallow = e->state == PE_STATE_PHONE_ACTIVE;
+        }
         return;
     }
 
-    // PE_STATE_PHONE_ACTIVE
-    if (!down) {
-        if (e->pc_keys_at_entry[sc]) {
-            // Windows saw this key go down: let it see it go up
-            e->pc_keys_at_entry[sc] = false;
+    // A key swallowed during a phone session and still held: Windows never saw
+    // it going down, so it must not see its auto-repeats nor its release
+    if (e->swallowed_until_up[sc]) {
+        res->swallow = true;
+        if (!down) {
+            e->swallowed_until_up[sc] = false;
+        }
+        if (e->state == PE_STATE_PC_ACTIVE) {
             return;
         }
-        res->swallow = true;
+    } else if (e->state == PE_STATE_PC_ACTIVE) {
+        return;
+    }
+
+    // PE_STATE_PHONE_ACTIVE, a key Windows does not know
+    res->swallow = true;
+    if (!down) {
+        e->swallowed_until_up[sc] = false;
         if (!e->phone_keys[sc]) {
             return;
         }
     } else {
-        res->swallow = true;
-        if (repeat || e->pc_keys_at_entry[sc] || e->phone_keys[sc]) {
+        e->swallowed_until_up[sc] = true;
+        if (repeat || e->phone_keys[sc]) {
             return;
         }
     }
@@ -670,6 +707,24 @@ pe_edge_on_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
         a->key.scancode = sc;
         a->key.down = down;
         a->key.mods = phone_mods(e);
+    }
+}
+
+void
+pe_edge_on_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
+               struct pe_result *res) {
+    res_init(res);
+
+    // Keys without HID usage are always left to the PC (see pe_edge.h)
+    if (e->state == PE_STATE_DISABLED || sc == 0) {
+        return;
+    }
+
+    handle_key(e, now, sc, down, res);
+
+    // Track what Windows has seen
+    if (!res->swallow) {
+        e->win_down[sc] = down;
     }
 }
 

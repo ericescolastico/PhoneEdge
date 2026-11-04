@@ -761,6 +761,306 @@ static void test_rotation_swaps_size(void) {
     assert(e.vpos.width == H && e.vpos.height == W);
 }
 
+
+static void test_extreme_config_fits_action_budget(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.phone_width = 10000;
+    cfg.phone_height = 10000;
+    cfg.pointer_scale = 0.25f;
+    cfg.anchor_extra = 100;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+
+    // Nothing is truncated: the pointer is estimated at the entry point
+    assert(res.count < PE_MAX_ACTIONS);
+    float x, y;
+    pe_edge_get_vpos(&e, &x, &y);
+    assert(fabsf(x - 24) < 1.0f);
+    assert(fabsf(y - res.actions[0].enter.ratio * 9999) < 1.0f);
+
+    // a typical phone with the smallest scale
+    cfg.phone_width = W;
+    cfg.phone_height = H;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    enter(&e, PE_SIDE_RIGHT, 0.1f, &res);
+    assert(res.count < PE_MAX_ACTIONS);
+    pe_edge_get_vpos(&e, &x, &y);
+    assert(fabsf(x - 24) < 1.0f);
+    assert(fabsf(y - res.actions[0].enter.ratio * (H - 1)) < 1.0f);
+}
+
+static void test_blocked_push_is_not_remembered(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+
+    // dragging a window to the edge: 50 pushes with the button held
+    pe_edge_on_button(&e, T0, PE_BTN_LEFT, true, &res);
+    for (int i = 0; i < 50; ++i) {
+        pe_edge_on_mouse_move(&e, T0 + 1 + i, 5, 0, 1919, 500, &res);
+    }
+    pe_edge_on_button(&e, T0 + 100, PE_BTN_LEFT, false, &res);
+    // a tiny nudge afterwards must not cross
+    pe_edge_on_mouse_move(&e, T0 + 200, 1, 0, 1919, 500, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+    assert(!res.swallow);
+}
+
+static void test_return_inset_is_clamped(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.return_inset = 0; // not reachable through pe_config_set
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    const struct pe_action *l = push_back(&e, PE_SIDE_RIGHT, T0 + 400, 2000,
+                                          &res);
+    assert(l);
+    // never in the edge zone: pushing right again does not cross
+    assert(l->leave.pc_x <= 1919 - 2);
+    uint64_t t = g_leave_time + 1000;
+    pe_edge_on_mouse_move(&e, t, 40, 0, l->leave.pc_x, l->leave.pc_y, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+}
+
+static void test_wheel_keeps_order_with_motion(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+
+    pe_edge_on_mouse_move(&e, T0 + 100, 5, 0, 0, 0, &res); // sent
+    pe_edge_on_mouse_move(&e, T0 + 102, 5, 0, 0, 0, &res); // pending
+    assert(res.count == 0);
+    pe_edge_on_wheel(&e, T0 + 103, false, 120, &res);
+    assert(res.count == 2);
+    assert(res.actions[0].type == PE_ACT_PHONE_MOVE);
+    assert(res.actions[1].type == PE_ACT_PHONE_WHEEL);
+}
+
+static void test_clock_going_backwards(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    const struct pe_action *l = push_back(&e, PE_SIDE_RIGHT, T0 + 400, 2000,
+                                          &res);
+    assert(l);
+    uint64_t t = g_leave_time;
+
+    // an older timestamp must not wrap around and skip the cooldown
+    pe_edge_on_mouse_move(&e, t - 1, 30, 0, 1919, 500, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+    pe_edge_on_mouse_move(&e, t + 400, 30, 0, 1919, 500, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+
+    // ... nor skip the guard after entering
+    pe_edge_on_mouse_move(&e, t + 100, -300, 0, 0, 0, &res); // before enter
+    assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+}
+
+static void test_hotkey_when_pause_release_is_never_delivered(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+
+    pe_edge_on_key(&e, T0 + 100, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 101, 0xE2, true, &res);
+    pe_edge_on_key(&e, T0 + 102, PE_SC_PAUSE, true, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+    // Windows never sends the release of Pause; the modifiers are released
+    pe_edge_on_key(&e, T0 + 103, 0xE2, false, &res);
+    pe_edge_on_key(&e, T0 + 104, 0xE0, false, &res);
+
+    // Enter again, and use the shortcut again
+    pe_edge_on_mouse_move(&e, T0 + 1000, 30, 0, 1919, 500, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+    pe_edge_on_key(&e, T0 + 1100, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 1101, 0xE2, true, &res);
+    pe_edge_on_key(&e, T0 + 1102, PE_SC_PAUSE, true, &res);
+    assert(res.swallow);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+    // pressing Pause alone afterwards is a normal key
+    pe_edge_on_key(&e, T0 + 1200, 0xE2, false, &res);
+    pe_edge_on_key(&e, T0 + 1201, 0xE0, false, &res);
+    pe_edge_on_key(&e, T0 + 1300, PE_SC_PAUSE, true, &res);
+    assert(!res.swallow);
+}
+
+static void test_keys_held_across_the_handoff(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+
+    pe_edge_on_key(&e, T0 + 100, 0x04, true, &res); // 'a' goes to the phone
+    assert(res.swallow);
+    // leave while 'a' is still held
+    pe_edge_on_key(&e, T0 + 101, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 102, 0xE2, true, &res);
+    pe_edge_on_key(&e, T0 + 103, PE_SC_PAUSE, true, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+
+    // Windows never saw 'a' go down: it must not see the repeats nor the
+    // release
+    pe_edge_on_key(&e, T0 + 200, 0x04, true, &res);
+    assert(res.swallow);
+    pe_edge_on_key(&e, T0 + 230, 0x04, true, &res);
+    assert(res.swallow);
+    pe_edge_on_key(&e, T0 + 300, 0x04, false, &res);
+    assert(res.swallow);
+    // and then it is a normal key again
+    pe_edge_on_key(&e, T0 + 400, 0x04, true, &res);
+    assert(!res.swallow);
+    pe_edge_on_key(&e, T0 + 401, 0x04, false, &res);
+    assert(!res.swallow);
+}
+
+static void test_unmapped_keys_are_left_to_the_pc(void) {
+    struct pe_edge e;
+    setup(&e, PE_SIDE_RIGHT);
+    struct pe_result res;
+
+    pe_edge_on_key(&e, T0, 0, true, &res);
+    assert(!res.swallow && res.count == 0);
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    // media keys keep working on the PC while the phone has the control; both
+    // press and release go to it, so nothing gets stuck
+    pe_edge_on_key(&e, T0 + 100, 0, true, &res);
+    assert(!res.swallow && res.count == 0);
+    pe_edge_on_key(&e, T0 + 101, 0, false, &res);
+    assert(!res.swallow && res.count == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Randomized invariants: whatever the sequence of events, the PC never keeps a
+// key that was released, and the phone never keeps a key/button after the
+// control comes back.
+
+struct fuzz {
+    uint32_t seed;
+    bool windows_down[256]; // keys whose press reached Windows
+    bool phone_keys[256];
+    uint8_t phone_buttons;
+    bool phys_down[256];
+};
+
+static uint32_t
+rnd(struct fuzz *f) {
+    f->seed = f->seed * 1664525u + 1013904223u;
+    return f->seed >> 8;
+}
+
+static void
+fuzz_apply_phone(struct fuzz *f, const struct pe_result *res) {
+    for (unsigned i = 0; i < res->count; ++i) {
+        const struct pe_action *a = &res->actions[i];
+        if (a->type == PE_ACT_PHONE_KEY) {
+            f->phone_keys[a->key.scancode] = a->key.down;
+        } else if (a->type == PE_ACT_PHONE_BUTTONS) {
+            f->phone_buttons = a->buttons.buttons;
+        } else if (a->type == PE_ACT_LEAVE_PHONE
+                && a->leave.reason != PE_LEAVE_DISCONNECT) {
+            for (int k = 0; k < 256; ++k) {
+                assert(!f->phone_keys[k]);
+            }
+            assert(f->phone_buttons == 0);
+        } else if (a->type == PE_ACT_PHONE_MOVE) {
+            assert(a->move.dx >= -127 && a->move.dx <= 127);
+            assert(a->move.dy >= -127 && a->move.dy <= 127);
+        }
+    }
+}
+
+static void test_random_sequences(void) {
+    static const uint8_t KEYS[] = {0x04, 0x05, 0x28, 0x2C, 0xE0, 0xE1, 0xE2,
+                                   0xE6, 0x48, 0x52, 0x4C};
+    for (uint32_t seed = 1; seed <= 60; ++seed) {
+        struct pe_edge e;
+        setup(&e, (enum pe_side) (seed % 4));
+        struct fuzz f = {.seed = seed * 7919u};
+        struct pe_result res;
+        uint64_t t = 1000;
+        uint8_t pc_buttons = 0;
+
+        for (int step = 0; step < 4000; ++step) {
+            t += rnd(&f) % 12;
+            uint32_t r = rnd(&f) % 100;
+            if (r < 45) {
+                int dx = (int) (rnd(&f) % 61) - 20; // biased toward +x
+                int dy = (int) (rnd(&f) % 41) - 20;
+                int cx = (rnd(&f) % 3) ? 1919 : (int) (rnd(&f) % 1920);
+                int cy = (rnd(&f) % 3) ? 540 : (int) (rnd(&f) % 1080);
+                if (seed % 4 == 0) { cx = 0; dx = -dx; }
+                pe_edge_on_mouse_move(&e, t, dx, dy, cx, cy, &res);
+                if (pe_edge_state(&e) == PE_STATE_PC_ACTIVE
+                        && !res.swallow) {
+                    assert(res.count == 0);
+                }
+            } else if (r < 60) {
+                uint8_t b = 1 << (rnd(&f) % 3);
+                bool down = rnd(&f) % 2;
+                pe_edge_on_button(&e, t, b, down, &res);
+            } else if (r < 65) {
+                pe_edge_on_wheel(&e, t, rnd(&f) % 2, (int) (rnd(&f) % 481) - 240,
+                                 &res);
+            } else if (r < 95) {
+                uint8_t k = KEYS[rnd(&f) % sizeof(KEYS)];
+                bool down = rnd(&f) % 2;
+                // the physical keyboard: a press while down is an auto-repeat
+                f.phys_down[k] = down;
+                bool was_win = f.windows_down[k];
+                pe_edge_on_key(&e, t, k, down, &res);
+                // Windows must see the release of every key it saw pressed
+                if (!down && was_win) {
+                    assert(!res.swallow);
+                }
+                if (down && !res.swallow) {
+                    f.windows_down[k] = true;
+                } else if (!down && !res.swallow) {
+                    f.windows_down[k] = false;
+                }
+                // a hotkey press must always be swallowed
+                if (down && k == PE_SC_PAUSE && e.pc_keys[0xE0] == false
+                        && e.pc_keys[0xE6] == false) {
+                    (void) 0;
+                }
+            } else if (r < 99) {
+                pe_edge_on_tick(&e, t, &res);
+            } else {
+                // the PC keeps working after a release (exit)
+                (void) pc_buttons;
+                pe_edge_on_tick(&e, t + 50, &res);
+            }
+            assert(res.count <= PE_MAX_ACTIONS);
+            fuzz_apply_phone(&f, &res);
+
+            float x, y;
+            pe_edge_get_vpos(&e, &x, &y);
+            assert(x >= 0 && x <= W - 1 && y >= 0 && y <= H - 1);
+        }
+
+        // Exit while on the phone: everything is released
+        pe_edge_release(&e, t + 10, &res);
+        fuzz_apply_phone(&f, &res);
+        for (int k = 0; k < 256; ++k) {
+            assert(!f.phone_keys[k]);
+        }
+        assert(f.phone_buttons == 0);
+        assert(pe_edge_state(&e) == PE_STATE_DISABLED);
+    }
+}
+
 int main(int argc, char *argv[]) {
     (void) argc;
     (void) argv;
@@ -792,5 +1092,14 @@ int main(int argc, char *argv[]) {
     test_release_on_exit();
     test_no_entry_without_phone_size();
     test_rotation_swaps_size();
+    test_extreme_config_fits_action_budget();
+    test_blocked_push_is_not_remembered();
+    test_return_inset_is_clamped();
+    test_wheel_keeps_order_with_motion();
+    test_clock_going_backwards();
+    test_hotkey_when_pause_release_is_never_delivered();
+    test_keys_held_across_the_handoff();
+    test_unmapped_keys_are_left_to_the_pc();
+    test_random_sequences();
     return 0;
 }

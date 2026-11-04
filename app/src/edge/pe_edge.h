@@ -31,8 +31,11 @@
 #include "edge/pe_vpos.h"
 
 #define PE_MAX_MONITORS 16
-// Worst case: anchoring (~2 * ceil(10000 / 127)) + positioning
-#define PE_MAX_ACTIONS 256
+// Worst case of an entry, with the limits accepted by pe_config (phone up to
+// 10000 px, pointer_scale >= 0.25): ENTER + at most PE_MAX_ANCHOR_REPORTS
+// anchoring reports + ceil(10000 / 0.25 / 127) = 315 positioning reports
+#define PE_MAX_ANCHOR_REPORTS 300
+#define PE_MAX_ACTIONS 640
 
 // Mouse buttons bit mask (same order as the HID report)
 #define PE_BTN_LEFT   (1 << 0)
@@ -139,8 +142,13 @@ struct pe_edge {
     // PC side
     float edge_push_acc;
     uint8_t pc_buttons;
-    bool pc_keys[256];
-    bool pc_keys_at_entry[256]; // keys held on the PC when entering
+    bool pc_keys[256]; // physical state of the keyboard
+    // Keys whose press reached Windows and whose release did not yet: their
+    // release must always reach it too, or Windows would see a stuck key
+    bool win_down[256];
+    // Keys whose press was swallowed (never seen by Windows) and that are
+    // still held: their auto-repeats and release must not reach Windows
+    bool swallowed_until_up[256];
     uint8_t pc_hid_mods;
 
     // Phone side
@@ -197,8 +205,9 @@ void
 pe_edge_on_wheel(struct pe_edge *e, uint64_t now_ms, bool horizontal,
                  int delta, struct pe_result *res);
 
-// `scancode` is a HID usage. Key repeats must be filtered by the platform or
-// they are ignored here.
+// `scancode` is a HID usage. Key repeats are ignored here. A key without HID
+// usage (scancode 0: media keys...) is never handled: it is left to the PC,
+// whatever the state, so that its release can never be lost.
 void
 pe_edge_on_key(struct pe_edge *e, uint64_t now_ms, uint8_t scancode, bool down,
                struct pe_result *res);

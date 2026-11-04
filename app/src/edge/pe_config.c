@@ -26,7 +26,7 @@ pe_config_defaults(struct pe_config *cfg) {
     cfg->edge_push = 12;
     cfg->leave_margin = 24;
     cfg->entry_inset = 24;
-    cfg->return_inset = 3;
+    cfg->return_inset = 3; // must stay above the edge zone (see pe_edge.c)
     cfg->flush_ms = 8;
     cfg->enter_guard_ms = 300;
     cfg->reenter_ms = 300;
@@ -196,7 +196,7 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
         {"edge_push", &cfg->edge_push, 0, 1000},
         {"leave_margin", &cfg->leave_margin, 0, 1000},
         {"entry_inset", &cfg->entry_inset, 0, 500},
-        {"return_inset", &cfg->return_inset, 0, 100},
+        {"return_inset", &cfg->return_inset, 2, 100},
         {"flush_ms", &cfg->flush_ms, 1, 100},
         {"enter_guard_ms", &cfg->enter_guard_ms, 0, 5000},
         {"reenter_ms", &cfg->reenter_ms, 0, 5000},
@@ -231,19 +231,23 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
         return PE_SET_OK;
     }
 
+    // pointer_scale >= 0.25 bounds the number of reports of an entry
     struct {
         const char *name;
         float *field;
+        double min;
     } floats[] = {
-        {"pointer_scale", &cfg->pointer_scale},
-        {"sensitivity", &cfg->sensitivity},
-        {"wheel_scale", &cfg->wheel_scale},
+        {"pointer_scale", &cfg->pointer_scale, 0.25},
+        {"sensitivity", &cfg->sensitivity, 0.05},
+        {"wheel_scale", &cfg->wheel_scale, 0.05},
     };
     for (size_t i = 0; i < sizeof(floats) / sizeof(floats[0]); ++i) {
         if (!strcmp(key, floats[i].name)) {
-            if (!parse_float(value, 0.05, 20.0, floats[i].field)) {
-                set_err(err, errlen, "%s: expected a number in 0.05-20, "
-                        "got \"%s\"", key, value);
+            if (!parse_float(value, floats[i].min, 20.0, floats[i].field)) {
+                char msg[96];
+                snprintf(msg, sizeof(msg), "%s: expected a number in %g-20",
+                         key, floats[i].min);
+                set_err(err, errlen, "%s, got \"%s\"", msg, value);
                 return PE_SET_INVALID_VALUE;
             }
             return PE_SET_OK;
@@ -268,6 +272,24 @@ pe_ini_parse(const char *text, pe_ini_cb cb, void *userdata, char *err,
         }
         if (*next) {
             ++next;
+        }
+
+        // Blank and comment lines may be arbitrarily long
+        {
+            const char *q = p;
+            const char *line_end = p + len;
+            if (lineno == 1 && len >= 3 && (unsigned char) q[0] == 0xEF
+                    && (unsigned char) q[1] == 0xBB
+                    && (unsigned char) q[2] == 0xBF) {
+                q += 3;
+            }
+            while (q < line_end && (*q == ' ' || *q == '\t')) {
+                ++q;
+            }
+            if (q == line_end || *q == ';' || *q == '#') {
+                p = next;
+                continue;
+            }
         }
 
         char line[512];
@@ -365,8 +387,14 @@ pe_config_validate(const struct pe_config *cfg, char *err, unsigned errlen) {
                  cfg->phone_height);
         return false;
     }
-    if (!(cfg->pointer_scale > 0) || !(cfg->sensitivity > 0)) {
-        snprintf(err, errlen, "pointer_scale and sensitivity must be > 0");
+    if (!(cfg->pointer_scale >= 0.25f) || !(cfg->sensitivity > 0)) {
+        snprintf(err, errlen,
+                 "pointer_scale must be at least 0.25 and sensitivity > 0");
+        return false;
+    }
+    if (cfg->phone_width > 10000 || cfg->phone_height > 10000) {
+        snprintf(err, errlen, "invalid phone size %dx%d", cfg->phone_width,
+                 cfg->phone_height);
         return false;
     }
     return true;
