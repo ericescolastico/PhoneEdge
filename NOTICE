@@ -1,0 +1,27 @@
+PhoneEdge
+Copyright 2026 PhoneEdge contributors
+
+Este projeto é um FORK MODIFICADO do scrcpy
+(https://github.com/Genymobile/scrcpy, versão 5.0.1),
+Copyright (C) 2018 Genymobile
+Copyright (C) 2018-2026 Romain Vimont
+licenciado sob a Apache License 2.0 (ver LICENSE).
+
+Modificações feitas neste fork (Apache 2.0, seção 4(b)):
+  - removidos o servidor Java, a decodificação de vídeo, áudio, câmera,
+    gravação, v4l2, gamepad, HID sobre USB (AOA), janela e as dependências
+    de FFmpeg/libusb (lista completa em docs/removido.md);
+  - o cliente passou a rodar sem janela, só com o canal de controle, e a
+    enviar mouse e teclado ao Android via UHID;
+  - adicionada a lógica de "edge handoff" (mouse sem bordas) e a integração
+    com Windows (Raw Input e hooks de baixo nível);
+  - o binário e o projeto foram renomeados para PhoneEdge. O nome, o ícone e
+    a marca "scrcpy" não são usados como identidade deste projeto.
+
+Componentes de terceiros distribuídos nos pacotes de release:
+  - scrcpy-server (Genymobile, Apache License 2.0), versão 5.0.1, obtido
+    sem modificações do release oficial do scrcpy. O servidor exige que o
+    cliente informe exatamente essa versão (SCRCPY_SERVER_VERSION).
+  - adb (Android SDK Platform-Tools, Google), obtido sem modificações, sob
+    os termos de licença do Android SDK (https://developer.android.com/studio/terms).
+  - SDL3 (zlib license), https://www.libsdl.org

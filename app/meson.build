@@ -48,7 +48,7 @@ if host_machine.system() == 'windows'
         'src/util/command.c',
         'src/sys/win/file.c',
         'src/sys/win/process.c',
-        windows.compile_resources('scrcpy-windows.rc'),
+        windows.compile_resources('phoneedge-windows.rc'),
     ]
     feature_test_macros += [
         '-D_WIN32_WINNT=0x0600',
