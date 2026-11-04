@@ -237,6 +237,54 @@ def test_dry_run_without_adb(exe):
         check("Control moved to the phone" in out and "phone_active=1" in out, out)
 
 
+def test_android_settings_applied_and_restored(exe):
+    proc, log = run(exe, "sleep 100\nquit\n",
+                    args=("--android-accel-off=yes", "--android-pointer-speed=3"))
+    out = proc.stdout + proc.stderr
+    check(proc.returncode == 0, out)
+    puts = [(e["key"], e["value"]) for e in log if e["event"] == "settings_put"]
+    dels = [e["key"] for e in log if e["event"] == "settings_delete"]
+    # applied first, then restored: the speed to its original value, and the
+    # acceleration key (which did not exist) deleted
+    check(("mouse_pointer_acceleration_enabled", "0") in puts, puts)
+    check(("pointer_speed", "3") in puts, puts)
+    check(("pointer_speed", "0") in puts, puts)          # restored
+    check("mouse_pointer_acceleration_enabled" in dels, dels)
+    check("Android: pointer_speed restored" in out, out)
+    # not touched without the options
+    proc, log = run(exe, "sleep 50\nquit\n")
+    check(not [e for e in log if e["event"].startswith("settings_")], log)
+
+
+def test_altgr_and_soft_reentry_on_the_wire(exe):
+    script = """
+        move 20 0 1919 540
+        sleep 600
+        key down 0xe0
+        sleep 20
+        key down 0xe2
+        sleep 20
+        key down 0x1a
+        sleep 20
+        key up 0x1a
+        sleep 20
+        key up 0xe2
+        sleep 20
+        key up 0xe0
+        sleep 100
+        quit
+    """
+    proc, log = run(exe, script)
+    out = proc.stdout + proc.stderr
+    check(proc.returncode == 0, out)
+    kb = inputs(log, KEYBOARD_ID)
+    mods = [d[0] for d in kb]
+    keys = [d[2] for d in kb]
+    # the 'w' (0x1a) goes out with the right Alt (0x40) only: AltGr+W = '?'
+    idx = keys.index(0x1A)
+    check(mods[idx] == 0x40, f"mods {mods[idx]:02x}: {[d.hex() for d in kb]}")
+
+
 def test_bad_script_line(exe):
     proc, log = run(exe, "bogus command\nquit\n")
     check("invalid command" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
@@ -251,6 +299,8 @@ TESTS = [
     test_config_file_and_cli_override,
     test_debug_log_file,
     test_dry_run_without_adb,
+    test_android_settings_applied_and_restored,
+    test_altgr_and_soft_reentry_on_the_wire,
 ]
 
 
