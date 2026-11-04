@@ -39,6 +39,11 @@ pe_win_emergency_release(void);
 void
 pe_win_install_safety_handlers(void);
 
+// Release the cursor confinement (clip_cursor), if any. To call before placing
+// the cursor: SetCursorPos() is limited to the clipping rectangle.
+void
+pe_win_release_clip(void);
+
 // Print the monitors in the order used by the `monitor` setting
 void
 pe_win_print_monitors(void);

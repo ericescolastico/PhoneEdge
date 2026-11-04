@@ -1,5 +1,7 @@
 #include "pe_sender.h"
 
+#include <stdio.h>
+
 #include "util/log.h"
 #include "util/tick.h"
 
@@ -36,6 +38,10 @@ push(struct pe_sender *s, const struct pe_cmd *cmd) {
     sc_mutex_lock(&s->mutex);
     if (s->stopped && !s->drain) {
         sc_mutex_unlock(&s->mutex);
+        if (cmd->type == PE_CMD_LOG) {
+            // nobody drains the queue anymore, but the line is still useful
+            sc_log(cmd->log.level, "%s", cmd->log.text);
+        }
         return;
     }
     if (s->count == PE_SENDER_QUEUE_SIZE) {
@@ -91,6 +97,14 @@ op_key(void *ud, uint8_t scancode, bool down, uint8_t mods) {
     push(ud, &cmd);
 }
 
+void
+pe_sender_log(void *ud, int level, const char *msg) {
+    struct pe_cmd cmd = {.type = PE_CMD_LOG};
+    cmd.log.level = level;
+    snprintf(cmd.log.text, sizeof(cmd.log.text), "%s", msg);
+    push(ud, &cmd);
+}
+
 const struct pe_phone_ops pe_sender_ops = {
     .move = op_move,
     .buttons = op_buttons,
@@ -110,6 +124,9 @@ execute(struct pe_sender *s, const struct pe_cmd *cmd) {
         case PE_CMD_WHEEL:
             s->real.wheel(s->real_ud, cmd->wheel.horizontal,
                           cmd->wheel.vertical);
+            break;
+        case PE_CMD_LOG:
+            sc_log(cmd->log.level, "%s", cmd->log.text);
             break;
         case PE_CMD_KEY:
             s->real.key(s->real_ud, cmd->key.scancode, cmd->key.down,
@@ -169,7 +186,16 @@ pe_sender_stop(struct pe_sender *s, bool drain) {
     s->stopped = true;
     s->drain = drain;
     if (!drain) {
-        s->count = 0;
+        // The phone is gone: drop the input, but not the log lines (the caller
+        // is not an input hook)
+        while (s->count) {
+            const struct pe_cmd *cmd = &s->queue[s->head];
+            if (cmd->type == PE_CMD_LOG) {
+                sc_log(cmd->log.level, "%s", cmd->log.text);
+            }
+            s->head = (s->head + 1) % PE_SENDER_QUEUE_SIZE;
+            --s->count;
+        }
     }
     sc_cond_signal(&s->cond);
     sc_mutex_unlock(&s->mutex);

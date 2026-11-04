@@ -33,7 +33,9 @@ static struct {
     HWND hwnd;
     HHOOK mouse_hook;
     HHOOK keyboard_hook;
-    bool clip_active;
+    atomic_bool clip_active;
+    // Last known layout of the displays, polled by the timer
+    int metrics[5];
 
     // Set by the emergency release: the hooks let everything through
     atomic_bool hard_release;
@@ -87,7 +89,17 @@ enumerate_monitors(struct pe_monitor_info *sorted) {
 }
 
 static void
+read_metrics(int m[5]) {
+    m[0] = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    m[1] = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    m[2] = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    m[3] = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    m[4] = GetSystemMetrics(SM_CMONITORS);
+}
+
+static void
 update_monitors(void) {
+    read_metrics(g.metrics);
     struct pe_monitor_info sorted[PE_MAX_MONITORS];
     int count = enumerate_monitors(sorted);
 
@@ -125,16 +137,20 @@ clip_to_cursor(void) {
     if (GetCursorPos(&p)) {
         RECT r = {p.x, p.y, p.x + 1, p.y + 1};
         ClipCursor(&r);
-        g.clip_active = true;
+        atomic_store(&g.clip_active, true);
     }
 }
 
 static void
 unclip(void) {
-    if (g.clip_active) {
+    if (atomic_exchange(&g.clip_active, false)) {
         ClipCursor(NULL);
-        g.clip_active = false;
     }
+}
+
+void
+pe_win_release_clip(void) {
+    unclip();
 }
 
 static void
@@ -143,9 +159,9 @@ sync_clip(void) {
         return;
     }
     bool active = pe_session_is_phone_active(g.session);
-    if (active && !g.clip_active) {
+    if (active && !atomic_load(&g.clip_active)) {
         clip_to_cursor();
-    } else if (!active && g.clip_active) {
+    } else if (!active && atomic_load(&g.clip_active)) {
         unclip();
     }
 }
@@ -231,10 +247,10 @@ keyboard_hook_proc(int code, WPARAM wparam, LPARAM lparam) {
         return CallNextHookEx(NULL, code, wparam, lparam);
     }
 
+    // Injected keys (key remappers, on-screen keyboards, remote tools) are
+    // handled like any other: PhoneEdge injects no keyboard input itself, and
+    // the emergency shortcut must work whatever produced the keys.
     const KBDLLHOOKSTRUCT *kb = (const KBDLLHOOKSTRUCT *) lparam;
-    if (kb->flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) {
-        return CallNextHookEx(NULL, code, wparam, lparam);
-    }
 
     bool down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
     bool up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
@@ -322,6 +338,14 @@ wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return DefWindowProc(hwnd, msg, wparam, lparam);
         case WM_TIMER:
             if (wparam == PE_TIMER_ID && !bypass()) {
+                // A message-only window does not receive WM_DISPLAYCHANGE:
+                // watch the layout of the displays ourselves
+                int m[5];
+                read_metrics(m);
+                if (memcmp(m, g.metrics, sizeof(m))) {
+                    LOGI("Display layout changed: monitors updated");
+                    update_monitors();
+                }
                 if (pe_session_is_phone_active(g.session)) {
                     pe_session_on_tick(g.session, now_ms());
                     sync_clip();
@@ -481,7 +505,7 @@ pe_win_emergency_release(void) {
     if (kh) {
         UnhookWindowsHookEx(kh);
     }
-    if (g.clip_active) {
+    if (atomic_load(&g.clip_active)) {
         ClipCursor(NULL);
     }
 }

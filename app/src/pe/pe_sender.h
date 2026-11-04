@@ -26,6 +26,7 @@ enum pe_cmd_type {
     PE_CMD_BUTTONS,
     PE_CMD_WHEEL,
     PE_CMD_KEY,
+    PE_CMD_LOG,
 };
 
 struct pe_cmd {
@@ -48,6 +49,10 @@ struct pe_cmd {
             bool down;
             uint8_t mods;
         } key;
+        struct {
+            int level;
+            char text[PE_SESSION_LOG_LEN];
+        } log;
     };
 };
 
@@ -87,6 +92,11 @@ pe_sender_join(struct pe_sender *s);
 
 void
 pe_sender_destroy(struct pe_sender *s);
+
+// A `pe_log_fn` for the session: the line is written by the sender thread, so
+// that the input hooks never wait for the console
+void
+pe_sender_log(void *sender, int level, const char *msg);
 
 // The `pe_phone_ops` to give to the session (with the sender as `ud`)
 extern const struct pe_phone_ops pe_sender_ops;

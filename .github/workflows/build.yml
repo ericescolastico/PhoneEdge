@@ -32,7 +32,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/sdl3-prefix
-          key: sdl3-${{ env.SDL_VERSION }}-linux-v1
+          key: sdl3-${{ env.SDL_VERSION }}-linux-v2
 
       - name: Build SDL3 (Ubuntu does not ship it)
         if: steps.cache-sdl.outputs.cache-hit != 'true'
@@ -43,19 +43,18 @@ jobs:
             "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
           mkdir sdl-src && tar xf sdl.tar.gz -C sdl-src --strip-components=1
           cmake -S sdl-src -B sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/sdl3-prefix" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+            -DCMAKE_INSTALL_PREFIX="$HOME/sdl3-prefix" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+            -DSDL_UNIX_CONSOLE_BUILD=ON
           cmake --build sdl-build
           cmake --install sdl-build
 
       - name: Install meson
-        run: |
-          sudo apt-get install -y --no-install-recommends ninja-build python3-pip
-          pip install --user meson
+        run: sudo apt-get install -y --no-install-recommends meson ninja-build
 
       - name: Configure (debug + sanitizers)
         run: |
           export PKG_CONFIG_PATH="$HOME/sdl3-prefix/lib/pkgconfig:$HOME/sdl3-prefix/lib/x86_64-linux-gnu/pkgconfig"
-          ~/.local/bin/meson setup build -Db_sanitize=address,undefined -Db_lundef=false
+          meson setup build -Db_sanitize=address,undefined -Db_lundef=false
 
       - name: Build
         run: ninja -C build
@@ -63,7 +62,7 @@ jobs:
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH="$HOME/sdl3-prefix/lib:$HOME/sdl3-prefix/lib/x86_64-linux-gnu"
-          ~/.local/bin/meson test -C build --print-errorlogs
+          meson test -C build --print-errorlogs
 
       - name: End-to-end (fake adb + fake server, no phone)
         run: |
@@ -88,7 +87,7 @@ jobs:
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-SDL3
+            mingw-w64-x86_64-sdl3
             unzip
             zip
             curl
@@ -127,7 +126,7 @@ jobs:
           ldd build/app/phoneedge.exe | awk '/mingw64/ {print $3}' | xargs -I{} cp {} "dist/$name/"
           cp packaging/phoneedge.ini "dist/$name/phoneedge.ini"
           cp README.md LICENSE NOTICE "dist/$name/"
-          cp packaging/LEIAME.txt "dist/$name/LEIAME.txt"
+          cp packaging/LEIAME.txt packaging/teste-celular.txt "dist/$name/"
           (cd dist && zip -qr "$name.zip" "$name")
           echo "ZIP_NAME=$name.zip" >> "$GITHUB_ENV"
           ls -la "dist/$name" dist
@@ -138,6 +137,7 @@ jobs:
           ./phoneedge.exe --version
           ./phoneedge.exe --help
           ./adb.exe version
+          test -f ./teste-celular.txt && test -f ./phoneedge.ini && test -f ./scrcpy-server
 
       - uses: actions/upload-artifact@v4
         with:

@@ -175,6 +175,7 @@ run_dry(struct scrcpy_options *options, struct scrcpy *s) {
 
     enum scrcpy_exit_code ret = event_loop();
     pe_app_stop(&s->pe, true);
+    pe_app_destroy(&s->pe);
     return ret;
 }
 
@@ -315,6 +316,10 @@ end:
     }
     if (controller_initialized) {
         sc_controller_destroy(&s->controller);
+    }
+    if (pe_started) {
+        // The controller threads are joined: no notification can come anymore
+        pe_app_destroy(&s->pe);
     }
 
     if (server_started) {

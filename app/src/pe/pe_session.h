@@ -33,6 +33,14 @@ struct pe_pc_ops {
     void (*set_cursor)(void *ud, int x, int y);
 };
 
+// Where the session sends its log lines (INFO/DEBUG), instead of writing them
+// itself: the caller is an input hook, which must never wait for the console
+// or a file. If NULL, the lines are logged directly (tests).
+typedef void (*pe_log_fn)(void *ud, int sc_log_level, const char *msg);
+
+#define PE_SESSION_MAX_LOGS 16
+#define PE_SESSION_LOG_LEN 160
+
 struct pe_session {
     struct pe_edge edge;
     struct pe_result res; // scratch, protected by the mutex
@@ -47,6 +55,19 @@ struct pe_session {
     atomic_bool phone_active;
     atomic_bool disabled;
 
+    pe_log_fn log;
+    void *log_ud;
+
+    // Collected under the lock, emitted after releasing it
+    struct {
+        int level;
+        char text[PE_SESSION_LOG_LEN];
+    } logs[PE_SESSION_MAX_LOGS];
+    unsigned log_count;
+    bool cursor_pending;
+    int cursor_x;
+    int cursor_y;
+
     // Statistics, for the debug log
     unsigned long entries;
     unsigned long leaves;
@@ -59,6 +80,9 @@ pe_session_init(struct pe_session *s, const struct pe_config *cfg,
 
 void
 pe_session_destroy(struct pe_session *s);
+
+void
+pe_session_set_logger(struct pe_session *s, pe_log_fn log, void *ud);
 
 void
 pe_session_set_monitors(struct pe_session *s, const struct pe_rect *rects,

@@ -229,6 +229,10 @@ if get_option('buildtype') == 'debug'
             'src/util/tick.c',
             'src/edge/pe_keymap.c',
         ]],
+        ['test_hid_mouse', [
+            'tests/test_hid_mouse.c',
+            'src/hid/hid_mouse.c',
+        ]],
         ['test_hid_keyboard', [
             'tests/test_hid_keyboard.c',
             'src/hid/hid_keyboard.c',

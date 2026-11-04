@@ -8,6 +8,7 @@
 #include "pe/pe_monitors.h"
 #include "pe/pe_script.h"
 #include "pe/pe_session.h"
+#include "util/log.h"
 
 struct rec {
     int moves;
@@ -122,6 +123,58 @@ test_flow(void) {
     pe_session_destroy(s);
 }
 
+static struct pe_session *g_reentrant;
+static int g_reentrant_calls;
+
+// The PC cursor is placed after the lock is released: the callback can use the
+// session (it would deadlock otherwise)
+static void
+r_cursor_reentrant(void *ud, int x, int y) {
+    (void) ud;
+    (void) x;
+    (void) y;
+    ++g_reentrant_calls;
+    pe_session_on_tick(g_reentrant, 1);
+    assert(!pe_session_is_phone_active(g_reentrant));
+}
+
+struct logs {
+    int count;
+    int infos;
+    char last[PE_SESSION_LOG_LEN];
+};
+
+static void
+collect_log(void *ud, int level, const char *msg) {
+    struct logs *l = ud;
+    ++l->count;
+    l->infos += level == SC_LOG_LEVEL_INFO;
+    snprintf(l->last, sizeof(l->last), "%s", msg);
+}
+
+static void
+test_cursor_and_logs_outside_the_lock(void) {
+    struct rec rec;
+    struct pe_session *s = make_session(&rec);
+    static const struct pe_pc_ops pc = {r_cursor_reentrant};
+    s->pc = pc;
+    g_reentrant = s;
+    g_reentrant_calls = 0;
+    struct logs logs = {0};
+    pe_session_set_logger(s, collect_log, &logs);
+
+    pe_session_on_mouse_move(s, 1000, 20, 0, 1919, 540);
+    assert(logs.infos == 1);
+    assert(strstr(logs.last, "Control moved to the phone"));
+    pe_session_on_key(s, 1500, 0xE0, true);
+    pe_session_on_key(s, 1501, 0xE2, true);
+    pe_session_on_key(s, 1502, PE_SC_PAUSE, true);
+    assert(g_reentrant_calls == 1);
+    assert(strstr(logs.last, "PC cursor"));
+    assert(logs.infos == 2);
+    pe_session_destroy(s);
+}
+
 static void
 test_disconnect_and_release(void) {
     struct rec rec;
@@ -228,6 +281,7 @@ int main(int argc, char *argv[]) {
     (void) argv;
 
     test_flow();
+    test_cursor_and_logs_outside_the_lock();
     test_disconnect_and_release();
     test_monitors_sort();
     test_script_lines();

@@ -101,6 +101,7 @@ static void
 set_pc_cursor(void *ud, int x, int y) {
     (void) ud;
 #ifdef _WIN32
+    pe_win_release_clip();
     if (!SetCursorPos(x, y)) {
         LOGW("SetCursorPos(%d, %d) failed (%lu)", x, y, GetLastError());
     }
@@ -120,6 +121,11 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
         return false;
     }
 
+    if (!sc_mutex_init(&app->lifecycle)) {
+        return false;
+    }
+    app->lifecycle_initialized = true;
+
     pe_inject_init(&app->inject, params->mp, params->kp);
 
     if (!pe_sender_init(&app->sender, &pe_inject_ops, &app->inject)) {
@@ -135,6 +141,8 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
         goto fail;
     }
     app->session_initialized = true;
+    // The log lines of the session are written by the sender thread
+    pe_session_set_logger(&app->session, pe_sender_log, &app->sender);
 
     int w, h;
     probe_phone_size(params, &w, &h);
@@ -172,6 +180,7 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
         }
         app->script_started = true;
         LOGI("Input from the script %s", params->script_path);
+        app->running = true;
         return true;
     }
 
@@ -189,35 +198,42 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
     LOGW("The edge handoff captures the mouse with Windows APIs: nothing to do "
          "on this system. Use --script to inject input.");
 #endif
+    app->running = true;
     return true;
 
 fail:
     pe_app_stop(app, false);
+    pe_app_destroy(app);
     return false;
 }
 
 void
 pe_app_notify_disconnect(struct pe_app *app) {
-    if (!app->session_initialized) {
+    if (!app->lifecycle_initialized) {
         return;
     }
-    // Give the mouse back right now: the phone cannot receive anything
-    pe_session_disconnect(&app->session, now_ms());
-    if (app->sender_initialized) {
+    sc_mutex_lock(&app->lifecycle);
+    if (app->running) {
+        // Give the mouse back right now: the phone cannot receive anything
+        pe_session_disconnect(&app->session, now_ms());
         pe_sender_stop(&app->sender, false);
     }
+    sc_mutex_unlock(&app->lifecycle);
 }
 
 void
 pe_app_stop(struct pe_app *app, bool phone_alive) {
+    if (app->lifecycle_initialized) {
+        // From now on, a disconnection notification does nothing
+        sc_mutex_lock(&app->lifecycle);
+        app->running = false;
+        sc_mutex_unlock(&app->lifecycle);
+    }
+
     if (app->script_started) {
         pe_script_stop(&app->script);
         pe_script_join(&app->script);
         app->script_started = false;
-    }
-    if (app->script_initialized) {
-        pe_script_destroy(&app->script);
-        app->script_initialized = false;
     }
 
     // Give the control back to the PC first, queuing the release of what is
@@ -242,6 +258,14 @@ pe_app_stop(struct pe_app *app, bool phone_alive) {
         pe_sender_join(&app->sender);
         app->sender_started = false;
     }
+}
+
+void
+pe_app_destroy(struct pe_app *app) {
+    if (app->script_initialized) {
+        pe_script_destroy(&app->script);
+        app->script_initialized = false;
+    }
     if (app->session_initialized) {
         pe_session_destroy(&app->session);
         app->session_initialized = false;
@@ -249,5 +273,9 @@ pe_app_stop(struct pe_app *app, bool phone_alive) {
     if (app->sender_initialized) {
         pe_sender_destroy(&app->sender);
         app->sender_initialized = false;
+    }
+    if (app->lifecycle_initialized) {
+        sc_mutex_destroy(&app->lifecycle);
+        app->lifecycle_initialized = false;
     }
 }
