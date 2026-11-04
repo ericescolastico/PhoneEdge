@@ -99,7 +99,7 @@ Pontos que importam para o protótipo:
 
 - O SDL não oferece captura global de mouse; o modo relativo precisa de uma janela com foco, que não existe em `--no-window` e que perderíamos exatamente quando o usuário empurra o mouse para fora do monitor.
 - Raw Input (`WM_INPUT`) exige um `HWND` (janela message-only) com **message loop próprio**; hooks `WH_*_LL` também exigem message loop na thread que os instala. `SDL_WaitEvent()` na thread principal não bombeia essas mensagens do jeito que precisamos e bloquearia o hook.
-- O hook deve ser curto: o Windows remove hooks que passam do `LowHooksTimeout` (~300 ms). Por isso a thread do hook só roda a máquina de estados (microssegundos) e enfileira mensagens; nunca faz E/S.
+- O hook deve ser curto: o Windows remove hooks que passam do `LowLevelHooksTimeout` (configurável no registro; ~300 ms por padrão, do que me lembro: **a validar**). Por isso a thread do hook só roda a máquina de estados (microssegundos) e enfileira mensagens; nunca faz E/S.
 - A thread principal continua rodando o `event_loop()` de `scrcpy.c` apenas para o ciclo de vida: `SC_EVENT_DEVICE_DISCONNECTED`, `SDL_EVENT_QUIT` (Ctrl+C), erro do controller.
 
 Arquitetura proposta (Fases 2–3):
