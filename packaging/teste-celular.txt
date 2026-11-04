@@ -1,0 +1,69 @@
+# Roteiro de teste do celular SEM usar o mouse/teclado do PC.
+# Uso:  phoneedge.exe --stay-awake --script teste-celular.txt
+#
+# Antes: desbloqueie o celular e abra um app com área de texto (ex.: Chrome, Notas).
+# Comandos: veja o início de app/src/pe/pe_script.h ou o README.
+
+# monitor simulado de 1920x1080; empurra contra a borda direita, no meio
+monitor 0 0 1920 1080
+move 8 0 1919 540
+sleep 30
+move 8 0 1919 540
+# espera a ancoragem e o posicionamento do ponteiro no celular
+sleep 1500
+
+# anda para a direita em 6 passos, depois para baixo
+move 40 0 0 0
+sleep 150
+move 40 0 0 0
+sleep 150
+move 40 0 0 0
+sleep 150
+move 40 0 0 0
+sleep 150
+move 40 0 0 0
+sleep 150
+move 40 0 0 0
+sleep 150
+move 0 40 0 0
+sleep 150
+move 0 40 0 0
+sleep 150
+move 0 40 0 0
+sleep 400
+
+# clique com o botão esquerdo
+down left
+sleep 80
+up left
+sleep 800
+
+# rola para baixo e para cima (3 "cliques" da roda)
+wheel -360
+sleep 600
+wheel 360
+sleep 600
+
+# digita "abc" (códigos HID: a=0x04, b=0x05, c=0x06)
+key down 0x04
+sleep 40
+key up 0x04
+sleep 100
+key down 0x05
+sleep 40
+key up 0x05
+sleep 100
+key down 0x06
+sleep 40
+key up 0x06
+sleep 800
+
+# volta ao "PC" empurrando o ponteiro pela borda esquerda do celular
+move -600 0 0 0
+sleep 150
+move -600 0 0 0
+sleep 150
+move -600 0 0 0
+sleep 600
+state
+quit
