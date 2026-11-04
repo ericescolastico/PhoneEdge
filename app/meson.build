@@ -4,57 +4,22 @@ src = [
     'src/adb/adb_device.c',
     'src/adb/adb_parser.c',
     'src/adb/adb_tunnel.c',
-    'src/audio_player.c',
-    'src/audio_regulator.c',
     'src/cli.c',
-    'src/clock.c',
     'src/compat.c',
     'src/control_msg.c',
     'src/controller.c',
-    'src/decoder.c',
-    'src/demuxer.c',
     'src/device_msg.c',
-    'src/disconnect.c',
-    'src/egl.c',
     'src/events.c',
-    'src/file_pusher.c',
-    'src/fps_counter.c',
-    'src/frame_buffer.c',
-    'src/hwdec.c',
-    'src/icon.c',
-    'src/input_manager.c',
-    'src/keyboard_sdk.c',
-    'src/mouse_capture.c',
-    'src/mouse_sdk.c',
-    'src/opengl.c',
     'src/options.c',
-    'src/packet_merger.c',
     'src/receiver.c',
-    'src/recorder.c',
     'src/scrcpy.c',
-    'src/screen.c',
-    'src/sdl_hints.c',
     'src/server.c',
-    'src/texture.c',
-    'src/version.c',
-    'src/video_regulator.c',
-    'src/hid/hid_gamepad.c',
     'src/hid/hid_keyboard.c',
     'src/hid/hid_mouse.c',
-    'src/interop/interop.c',
-    'src/interop/interop_software.c',
-    'src/trait/frame_source.c',
-    'src/trait/packet_source.c',
-    'src/uhid/gamepad_uhid.c',
     'src/uhid/keyboard_uhid.c',
     'src/uhid/mouse_uhid.c',
-    'src/uhid/uhid_output.c',
-    'src/util/acksync.c',
-    'src/util/audiobuf.c',
-    'src/util/average.c',
     'src/util/env.c',
     'src/util/file.c',
-    'src/util/intmap.c',
     'src/util/intr.c',
     'src/util/log.c',
     'src/util/memory.c',
@@ -63,13 +28,10 @@ src = [
     'src/util/process.c',
     'src/util/process_intr.c',
     'src/util/rand.c',
-    'src/util/sdl.c',
-    'src/util/strbuf.c',
     'src/util/str.c',
-    'src/util/term.c',
+    'src/util/strbuf.c',
     'src/util/thread.c',
     'src/util/tick.c',
-    'src/util/timeout.c',
 ]
 
 feature_test_macros = [
@@ -105,74 +67,13 @@ endif
 
 add_project_arguments(feature_test_macros, language: 'c')
 
-v4l2_support = get_option('v4l2') and host_machine.system() == 'linux'
-if v4l2_support
-    src += [ 'src/v4l2_sink.c' ]
-endif
-
-vaapi_support = get_option('vaapi') and host_machine.system() == 'linux'
-if vaapi_support
-    src += [ 'src/interop/interop_vaapi.c' ]
-endif
-
-d3d11va_support = get_option('d3d11va') and host_machine.system() == 'windows'
-if d3d11va_support
-    src += [ 'src/interop/interop_d3d11va.c' ]
-endif
-
-videotoolbox_support = get_option('videotoolbox') \
-                       and host_machine.system() == 'darwin'
-if videotoolbox_support
-    src += [ 'src/interop/interop_videotoolbox.c' ]
-endif
-
-usb_support = get_option('usb')
-if usb_support
-    src += [
-        'src/usb/aoa_hid.c',
-        'src/usb/gamepad_aoa.c',
-        'src/usb/keyboard_aoa.c',
-        'src/usb/mouse_aoa.c',
-        'src/usb/scrcpy_otg.c',
-        'src/usb/usb.c',
-    ]
-endif
-
 cc = meson.get_compiler('c')
 
 static = get_option('static')
 
 dependencies = [
-    dependency('libavformat', version: '>= 60.3', static: static),
-    dependency('libavcodec', version: '>= 60.3', static: static),
-    dependency('libavutil', version: '>= 58.2', static: static),
-    dependency('libswresample', static: static),
     dependency('sdl3', version: '>= 3.2.0', static: static),
 ]
-
-if v4l2_support
-    dependencies += dependency('libavdevice', static: static)
-endif
-
-if vaapi_support
-    libdrm_dep = dependency('libdrm')
-    dependencies += libdrm_dep.partial_dependency(compile_args: true,
-                                                  includes: true)
-    if static
-        # libva and libdrm are loaded at runtime by a shim (which only needs
-        # their headers), so that the static binary does not depend on them
-        libva_drm_dep = dependency('libva-drm')
-        dependencies += libva_drm_dep.partial_dependency(compile_args: true,
-                                                         includes: true)
-        # "required: false" because dlopen() may be provided by libc itself
-        dependencies += cc.find_library('dl', required: false)
-        src += [ 'src/vaapi_shim.c' ]
-    endif
-endif
-
-if usb_support
-    dependencies += dependency('libusb-1.0', static: static)
-endif
 
 if host_machine.system() == 'windows'
     dependencies += cc.find_library('mingw32')
@@ -201,11 +102,14 @@ conf.set('HAVE_SOCK_CLOEXEC', host_machine.system() != 'windows' and
 # the version, updated on release
 conf.set_quoted('SCRCPY_VERSION', meson.project_version())
 
+# the version of the scrcpy-server we push to the device: the server rejects
+# clients with a different version, so this must match the prebuilt server
+conf.set_quoted('SCRCPY_SERVER_VERSION', '5.0.1')
+
 # the prefix used during configuration (meson --prefix=PREFIX)
 conf.set_quoted('PREFIX', get_option('prefix'))
 
-# build a "portable" version (with scrcpy-server accessible from the same
-# directory as the executable)
+# use scrcpy-server from the same directory as the executable
 conf.set('PORTABLE', get_option('portable'))
 
 # the default client TCP port range for the "adb reverse" tunnel
@@ -216,26 +120,11 @@ conf.set('DEFAULT_LOCAL_PORT_RANGE_LAST', '27199')
 # run a server debugger and wait for a client to be attached
 conf.set('SERVER_DEBUGGER', get_option('server_debugger'))
 
-# enable V4L2 support (linux only)
-conf.set('HAVE_V4L2', v4l2_support)
-
-# enable VA-API hardware decoding (linux only)
-conf.set('HAVE_VAAPI', vaapi_support)
-
-# enable D3D11 hardware decoding (windows only)
-conf.set('HAVE_D3D11VA', d3d11va_support)
-
-# enable VideoToolbox hardware decoding (macOS only)
-conf.set('HAVE_VIDEOTOOLBOX', videotoolbox_support)
-
-# enable HID over AOA support (linux only)
-conf.set('HAVE_USB', usb_support)
-
 configure_file(configuration: conf, output: 'config.h')
 
 src_dir = include_directories('src')
 
-executable('scrcpy', src,
+executable('phoneedge', src,
            dependencies: dependencies,
            include_directories: src_dir,
            install: true,
@@ -256,11 +145,6 @@ if get_option('buildtype') == 'debug'
         ['test_binary', [
             'tests/test_binary.c',
         ]],
-        ['test_audiobuf', [
-            'tests/test_audiobuf.c',
-            'src/util/audiobuf.c',
-            'src/util/memory.c',
-        ]],
         ['test_cli', [
             'tests/test_cli.c',
             'src/cli.c',
@@ -269,7 +153,6 @@ if get_option('buildtype') == 'debug'
             'src/util/net.c',
             'src/util/str.c',
             'src/util/strbuf.c',
-            'src/util/term.c',
         ]],
         ['test_command_windows', [
           'tests/test_command_windows.c',
@@ -286,10 +169,6 @@ if get_option('buildtype') == 'debug'
         ['test_device_msg_deserialize', [
             'tests/test_device_msg_deserialize.c',
             'src/device_msg.c',
-        ]],
-        ['test_orientation', [
-            'tests/test_orientation.c',
-            'src/options.c',
         ]],
         ['test_strbuf', [
             'tests/test_strbuf.c',

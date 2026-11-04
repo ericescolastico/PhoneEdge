@@ -6,14 +6,20 @@
 #include "cli.h"
 #include "options.h"
 
-static void test_flag_version(void) {
+static struct scrcpy_cli_args
+default_args(void) {
     struct scrcpy_cli_args args = {
         .opts = scrcpy_options_default,
         .help = false,
         .version = false,
+        .pause_on_exit = false,
     };
+    return args;
+}
 
-    char *argv[] = {"scrcpy", "-v"};
+static void test_flag_version(void) {
+    struct scrcpy_cli_args args = default_args();
+    char *argv[] = {"phoneedge", "-v"};
 
     bool ok = scrcpy_parse_args(&args, 2, argv);
     assert(ok);
@@ -22,131 +28,72 @@ static void test_flag_version(void) {
 }
 
 static void test_flag_help(void) {
-    struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
-        .help = false,
-        .version = false,
-    };
-
-    char *argv[] = {"scrcpy", "-v"};
+    struct scrcpy_cli_args args = default_args();
+    char *argv[] = {"phoneedge", "--help"};
 
     bool ok = scrcpy_parse_args(&args, 2, argv);
     assert(ok);
-    assert(!args.help);
-    assert(args.version);
+    assert(args.help);
+    assert(!args.version);
 }
 
 static void test_options(void) {
-    struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
-        .help = false,
-        .version = false,
-    };
-
+    struct scrcpy_cli_args args = default_args();
     char *argv[] = {
-        "scrcpy",
-        "--always-on-top",
-        "--video-bit-rate", "5M",
-        "--crop", "100:200:300:400",
-        "--fullscreen",
-        "--max-fps", "30",
-        "--max-size", "1024",
-        // "--no-control" is not compatible with "--turn-screen-off"
-        // "--no-playback" is not compatible with "--fulscreen"
-        "--port", "1234:1236",
-        "--push-target", "/sdcard/Movies",
-        "--record", "file",
-        "--record-format", "mkv",
+        "phoneedge",
         "--serial", "0123456789abcdef",
-        "--show-touches",
-        "--turn-screen-off",
-        "--prefer-text",
-        "--window-title", "my device",
-        "--window-x", "100",
-        "--window-y", "-1",
-        "--window-width", "600",
-        "--window-height", "0",
-        "--window-borderless",
+        "--port", "1234:1236",
+        "--stay-awake",
+        "--force-adb-forward",
+        "--kill-adb-on-close",
+        "--tunnel-host", "1.2.3.4",
+        "--tunnel-port", "1234",
+        "--verbosity", "warn",
+        "--pause-on-exit",
     };
 
     bool ok = scrcpy_parse_args(&args, ARRAY_LEN(argv), argv);
     assert(ok);
 
     const struct scrcpy_options *opts = &args.opts;
-    assert(opts->always_on_top);
-    assert(opts->video_bit_rate == 5000000);
-    assert(!strcmp(opts->crop, "100:200:300:400"));
-    assert(opts->fullscreen);
-    assert(!strcmp(opts->max_fps, "30"));
-    assert(opts->max_size == 1024);
+    assert(!strcmp(opts->serial, "0123456789abcdef"));
     assert(opts->port_range.first == 1234);
     assert(opts->port_range.last == 1236);
-    assert(!strcmp(opts->push_target, "/sdcard/Movies"));
-    assert(!strcmp(opts->record_filename, "file"));
-    assert(opts->record_format == SC_RECORD_FORMAT_MKV);
-    assert(!strcmp(opts->serial, "0123456789abcdef"));
-    assert(opts->show_touches);
-    assert(opts->turn_screen_off);
-    assert(opts->key_inject_mode == SC_KEY_INJECT_MODE_TEXT);
-    assert(!strcmp(opts->window_title, "my device"));
-    assert(opts->window_x == 100);
-    assert(opts->window_y == -1);
-    assert(opts->window_width == 600);
-    assert(opts->window_height == 0);
-    assert(opts->window_borderless);
+    assert(opts->stay_awake);
+    assert(opts->force_adb_forward);
+    assert(opts->kill_adb_on_close);
+    assert(opts->tunnel_host == 0x01020304);
+    assert(opts->tunnel_port == 1234);
+    assert(opts->log_level == SC_LOG_LEVEL_WARN);
+    assert(args.pause_on_exit);
 }
 
-static void test_options2(void) {
-    struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
-        .help = false,
-        .version = false,
-    };
+static void test_port_range_reversed(void) {
+    struct scrcpy_cli_args args = default_args();
+    char *argv[] = {"phoneedge", "--port", "2000:1000"};
 
-    char *argv[] = {
-        "scrcpy",
-        "--no-control",
-        "--no-playback",
-        "--record", "file.mp4", // cannot enable --no-playback without recording
-    };
-
-    bool ok = scrcpy_parse_args(&args, ARRAY_LEN(argv), argv);
+    bool ok = scrcpy_parse_args(&args, 3, argv);
     assert(ok);
-
-    const struct scrcpy_options *opts = &args.opts;
-    assert(!opts->control);
-    assert(!opts->video_playback);
-    assert(!opts->audio_playback);
-    assert(!strcmp(opts->record_filename, "file.mp4"));
-    assert(opts->record_format == SC_RECORD_FORMAT_MP4);
+    assert(args.opts.port_range.first == 1000);
+    assert(args.opts.port_range.last == 2000);
 }
 
-static void test_parse_shortcut_mods(void) {
-    uint8_t mods;
-    bool ok;
+static void test_invalid(void) {
+    struct scrcpy_cli_args args = default_args();
+    char *bad_level[] = {"phoneedge", "-V", "loud"};
+    assert(!scrcpy_parse_args(&args, 3, bad_level));
 
-    ok = sc_parse_shortcut_mods("lctrl", &mods);
-    assert(ok);
-    assert(mods == SC_SHORTCUT_MOD_LCTRL);
+    args = default_args();
+    char *bad_port[] = {"phoneedge", "--port", "70000"};
+    assert(!scrcpy_parse_args(&args, 3, bad_port));
 
-    ok = sc_parse_shortcut_mods("rctrl,lalt", &mods);
-    assert(ok);
-    assert(mods == (SC_SHORTCUT_MOD_RCTRL | SC_SHORTCUT_MOD_LALT));
+    args = default_args();
+    char *unknown[] = {"phoneedge", "--video-bit-rate", "5M"};
+    assert(!scrcpy_parse_args(&args, 3, unknown));
 
-    ok = sc_parse_shortcut_mods("lsuper,rsuper,lctrl", &mods);
-    assert(ok);
-    assert(mods == (SC_SHORTCUT_MOD_LSUPER
-                  | SC_SHORTCUT_MOD_RSUPER
-                  | SC_SHORTCUT_MOD_LCTRL));
-
-    ok = sc_parse_shortcut_mods("", &mods);
-    assert(!ok);
-
-    ok = sc_parse_shortcut_mods("lctrl+", &mods);
-    assert(!ok);
-
-    ok = sc_parse_shortcut_mods("lctrl,", &mods);
-    assert(!ok);
+    args = default_args();
+    char *extra[] = {"phoneedge", "foo"};
+    assert(!scrcpy_parse_args(&args, 2, extra));
 }
 
 int main(int argc, char *argv[]) {
@@ -156,7 +103,7 @@ int main(int argc, char *argv[]) {
     test_flag_version();
     test_flag_help();
     test_options();
-    test_options2();
-    test_parse_shortcut_mods();
+    test_port_range_reversed();
+    test_invalid();
     return 0;
 }

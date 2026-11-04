@@ -17,7 +17,7 @@
 
 #define SC_SERVER_FILENAME "scrcpy-server"
 
-#define SC_SERVER_PATH_DEFAULT PREFIX "/share/scrcpy/" SC_SERVER_FILENAME
+#define SC_SERVER_PATH_DEFAULT PREFIX "/share/phoneedge/" SC_SERVER_FILENAME
 #define SC_DEVICE_SERVER_PATH "/data/local/tmp/scrcpy-server.jar"
 
 #define SC_ADB_PORT_DEFAULT 5555
@@ -102,109 +102,6 @@ sc_server_sleep(struct sc_server *server, sc_tick deadline) {
     return !stopped;
 }
 
-static const char *
-sc_server_get_codec_name(enum sc_codec codec) {
-    switch (codec) {
-        case SC_CODEC_H264:
-            return "h264";
-        case SC_CODEC_H265:
-            return "h265";
-        case SC_CODEC_AV1:
-            return "av1";
-        case SC_CODEC_VP8:
-            return "vp8";
-        case SC_CODEC_VP9:
-            return "vp9";
-        case SC_CODEC_OPUS:
-            return "opus";
-        case SC_CODEC_AAC:
-            return "aac";
-        case SC_CODEC_FLAC:
-            return "flac";
-        case SC_CODEC_RAW:
-            return "raw";
-        default:
-            assert(!"unexpected codec");
-            return NULL;
-    }
-}
-
-static const char *
-sc_server_get_camera_facing_name(enum sc_camera_facing camera_facing) {
-    switch (camera_facing) {
-        case SC_CAMERA_FACING_FRONT:
-            return "front";
-        case SC_CAMERA_FACING_BACK:
-            return "back";
-        case SC_CAMERA_FACING_EXTERNAL:
-            return "external";
-        default:
-            assert(!"unexpected camera facing");
-            return NULL;
-    }
-}
-
-static const char *
-sc_server_get_audio_source_name(enum sc_audio_source audio_source) {
-    switch (audio_source) {
-        case SC_AUDIO_SOURCE_OUTPUT:
-            return "output";
-        case SC_AUDIO_SOURCE_MIC:
-            return "mic";
-        case SC_AUDIO_SOURCE_PLAYBACK:
-            return "playback";
-        case SC_AUDIO_SOURCE_MIC_UNPROCESSED:
-            return "mic-unprocessed";
-        case SC_AUDIO_SOURCE_MIC_CAMCORDER:
-            return "mic-camcorder";
-        case SC_AUDIO_SOURCE_MIC_VOICE_RECOGNITION:
-            return "mic-voice-recognition";
-        case SC_AUDIO_SOURCE_MIC_VOICE_COMMUNICATION:
-            return "mic-voice-communication";
-        case SC_AUDIO_SOURCE_VOICE_CALL:
-            return "voice-call";
-        case SC_AUDIO_SOURCE_VOICE_CALL_UPLINK:
-            return "voice-call-uplink";
-        case SC_AUDIO_SOURCE_VOICE_CALL_DOWNLINK:
-            return "voice-call-downlink";
-        case SC_AUDIO_SOURCE_VOICE_PERFORMANCE:
-            return "voice-performance";
-        default:
-            assert(!"unexpected audio source");
-            return NULL;
-    }
-}
-
-static const char *
-sc_server_get_display_ime_policy_name(enum sc_display_ime_policy policy) {
-    switch (policy) {
-        case SC_DISPLAY_IME_POLICY_LOCAL:
-            return "local";
-        case SC_DISPLAY_IME_POLICY_FALLBACK:
-            return "fallback";
-        case SC_DISPLAY_IME_POLICY_HIDE:
-            return "hide";
-        default:
-            assert(!"unexpected display IME policy");
-            return NULL;
-    }
-}
-
-static bool
-validate_string(const char *s) {
-    // The parameters values are passed as command line arguments to adb, so
-    // they must either be properly escaped, or they must not contain any
-    // special shell characters.
-    // Since they are not properly escaped on Windows anyway (see
-    // sys/win/process.c), just forbid special shell characters.
-    if (strpbrk(s, " ;'\"*$?&`#\\|<>[]{}()!~\r\n")) {
-        LOGE("Invalid server param: [%s]", s);
-        return false;
-    }
-
-    return true;
-}
-
 static sc_pid
 execute_server(struct sc_server *server,
                const struct sc_server_params *params) {
@@ -250,7 +147,9 @@ execute_server(struct sc_server *server,
 
     cmd[count++] = "/"; // unused
     cmd[count++] = "com.genymobile.scrcpy.Server";
-    cmd[count++] = SCRCPY_VERSION;
+    // The prebuilt server rejects a client of a different version, so this is
+    // the version of the scrcpy-server, not the one of PhoneEdge
+    cmd[count++] = SCRCPY_SERVER_VERSION;
 
     unsigned dyn_idx = count; // from there, the strings are allocated
 #define ADD_PARAM(fmt, ...) do { \
@@ -260,200 +159,19 @@ execute_server(struct sc_server *server,
         } \
         cmd[count++] = p; \
     } while(0)
-#define VALIDATE_STRING(s) do { \
-        if (!validate_string(s)) { \
-            goto end; \
-        } \
-    } while(0)
 
     ADD_PARAM("scid=%08x", params->scid);
     ADD_PARAM("log_level=%s", log_level_to_server_string(params->log_level));
 
-    if (!params->video) {
-        ADD_PARAM("video=false");
-    }
-    if (params->video_bit_rate) {
-        ADD_PARAM("video_bit_rate=%" PRIu32, params->video_bit_rate);
-    }
-    if (!params->audio) {
-        ADD_PARAM("audio=false");
-    }
-    if (params->audio_bit_rate) {
-        ADD_PARAM("audio_bit_rate=%" PRIu32, params->audio_bit_rate);
-    }
-    if (params->video_codec != SC_CODEC_H264) {
-        ADD_PARAM("video_codec=%s",
-                  sc_server_get_codec_name(params->video_codec));
-    }
-    if (params->audio_codec != SC_CODEC_OPUS) {
-        ADD_PARAM("audio_codec=%s",
-            sc_server_get_codec_name(params->audio_codec));
-    }
-    if (params->video_source != SC_VIDEO_SOURCE_DISPLAY) {
-        assert(params->video_source == SC_VIDEO_SOURCE_CAMERA);
-        ADD_PARAM("video_source=camera");
-    }
-    // If audio is enabled, an "auto" audio source must have been resolved
-    assert(params->audio_source != SC_AUDIO_SOURCE_AUTO || !params->audio);
-    if (params->audio_source != SC_AUDIO_SOURCE_OUTPUT && params->audio) {
-        ADD_PARAM("audio_source=%s",
-                  sc_server_get_audio_source_name(params->audio_source));
-    }
-    if (params->audio_dup) {
-        ADD_PARAM("audio_dup=true");
-    }
-    if (params->max_size) {
-        ADD_PARAM("max_size=%" PRIu16, params->max_size);
-    }
-    if (params->max_fps) {
-        VALIDATE_STRING(params->max_fps);
-        ADD_PARAM("max_fps=%s", params->max_fps);
-    }
-    if (params->min_size_alignment != 1) {
-        ADD_PARAM("min_size_alignment=%" PRIu8, params->min_size_alignment);
-    }
-    if (params->angle) {
-        VALIDATE_STRING(params->angle);
-        ADD_PARAM("angle=%s", params->angle);
-    }
-    if (params->capture_orientation_lock != SC_ORIENTATION_UNLOCKED
-            || params->capture_orientation != SC_ORIENTATION_0) {
-        if (params->capture_orientation_lock == SC_ORIENTATION_LOCKED_INITIAL) {
-            ADD_PARAM("capture_orientation=@");
-        } else {
-            const char *orient =
-                sc_orientation_get_name(params->capture_orientation);
-            bool locked =
-                params->capture_orientation_lock != SC_ORIENTATION_UNLOCKED;
-            ADD_PARAM("capture_orientation=%s%s", locked ? "@" : "", orient);
-        }
-    }
+    // Control only: no video, no audio
+    ADD_PARAM("video=false");
+    ADD_PARAM("audio=false");
+    ADD_PARAM("clipboard_autosync=false");
     if (server->tunnel.forward) {
         ADD_PARAM("tunnel_forward=true");
     }
-    if (params->crop) {
-        VALIDATE_STRING(params->crop);
-        ADD_PARAM("crop=%s", params->crop);
-    }
-    if (!params->control) {
-        // By default, control is true
-        ADD_PARAM("control=false");
-    }
-    if (params->display_id) {
-        ADD_PARAM("display_id=%" PRIu32, params->display_id);
-    }
-    if (params->camera_id) {
-        VALIDATE_STRING(params->camera_id);
-        ADD_PARAM("camera_id=%s", params->camera_id);
-    }
-    if (params->camera_size) {
-        VALIDATE_STRING(params->camera_size);
-        ADD_PARAM("camera_size=%s", params->camera_size);
-    }
-    if (params->camera_facing != SC_CAMERA_FACING_ANY) {
-        ADD_PARAM("camera_facing=%s",
-            sc_server_get_camera_facing_name(params->camera_facing));
-    }
-    if (params->camera_ar) {
-        VALIDATE_STRING(params->camera_ar);
-        ADD_PARAM("camera_ar=%s", params->camera_ar);
-    }
-    if (params->camera_fps) {
-        ADD_PARAM("camera_fps=%" PRIu16, params->camera_fps);
-    }
-    if (params->camera_high_speed) {
-        ADD_PARAM("camera_high_speed=true");
-    }
-    if (params->camera_torch) {
-        ADD_PARAM("camera_torch=true");
-    }
-    if (params->camera_zoom) {
-        VALIDATE_STRING(params->camera_zoom);
-        ADD_PARAM("camera_zoom=%s", params->camera_zoom);
-    }
-    if (params->show_touches) {
-        ADD_PARAM("show_touches=true");
-    }
     if (params->stay_awake) {
         ADD_PARAM("stay_awake=true");
-    }
-    if (params->screen_off_timeout != -1) {
-        assert(params->screen_off_timeout >= 0);
-        uint64_t ms = SC_TICK_TO_MS(params->screen_off_timeout);
-        ADD_PARAM("screen_off_timeout=%" PRIu64, ms);
-    }
-    if (params->video_codec_options) {
-        VALIDATE_STRING(params->video_codec_options);
-        ADD_PARAM("video_codec_options=%s", params->video_codec_options);
-    }
-    if (params->audio_codec_options) {
-        VALIDATE_STRING(params->audio_codec_options);
-        ADD_PARAM("audio_codec_options=%s", params->audio_codec_options);
-    }
-    if (params->video_encoder) {
-        VALIDATE_STRING(params->video_encoder);
-        ADD_PARAM("video_encoder=%s", params->video_encoder);
-    }
-    if (params->audio_encoder) {
-        VALIDATE_STRING(params->audio_encoder);
-        ADD_PARAM("audio_encoder=%s", params->audio_encoder);
-    }
-    if (params->power_off_on_close) {
-        ADD_PARAM("power_off_on_close=true");
-    }
-    if (!params->clipboard_autosync) {
-        // By default, clipboard_autosync is true
-        ADD_PARAM("clipboard_autosync=false");
-    }
-    if (!params->downsize_on_error) {
-        // By default, downsize_on_error is true
-        ADD_PARAM("downsize_on_error=false");
-    }
-    if (!params->cleanup) {
-        // By default, cleanup is true
-        ADD_PARAM("cleanup=false");
-    }
-    if (!params->power_on) {
-        // By default, power_on is true
-        ADD_PARAM("power_on=false");
-    }
-    if (params->new_display) {
-        VALIDATE_STRING(params->new_display);
-        ADD_PARAM("new_display=%s", params->new_display);
-    }
-    if (params->flex_display) {
-        ADD_PARAM("flex_display=true");
-    }
-    if (params->ignore_video_encoder_constraints) {
-        ADD_PARAM("ignore_video_encoder_constraints=true");
-    }
-    if (params->display_ime_policy != SC_DISPLAY_IME_POLICY_UNDEFINED) {
-        ADD_PARAM("display_ime_policy=%s",
-            sc_server_get_display_ime_policy_name(params->display_ime_policy));
-    }
-    if (!params->vd_destroy_content) {
-        ADD_PARAM("vd_destroy_content=false");
-    }
-    if (!params->vd_system_decorations) {
-        ADD_PARAM("vd_system_decorations=false");
-    }
-    if (params->keep_active) {
-        ADD_PARAM("keep_active=true");
-    }
-    if (params->list & SC_OPTION_LIST_ENCODERS) {
-        ADD_PARAM("list_encoders=true");
-    }
-    if (params->list & SC_OPTION_LIST_DISPLAYS) {
-        ADD_PARAM("list_displays=true");
-    }
-    if (params->list & SC_OPTION_LIST_CAMERAS) {
-        ADD_PARAM("list_cameras=true");
-    }
-    if (params->list & SC_OPTION_LIST_CAMERA_SIZES) {
-        ADD_PARAM("list_camera_sizes=true");
-    }
-    if (params->list & SC_OPTION_LIST_APPS) {
-        ADD_PARAM("list_apps=true");
     }
 
 #undef ADD_PARAM
@@ -575,8 +293,6 @@ sc_server_init(struct sc_server *server, const struct sc_server_params *params,
     server->device_socket_name = NULL;
     server->stopped = false;
 
-    server->video_socket = SC_SOCKET_NONE;
-    server->audio_socket = SC_SOCKET_NONE;
     server->control_socket = SC_SOCKET_NONE;
 
     sc_adb_tunnel_init(&server->tunnel);
@@ -618,36 +334,12 @@ sc_server_connect_to(struct sc_server *server, struct sc_server_info *info) {
     const char *serial = server->serial;
     assert(serial);
 
-    bool video = server->params.video;
-    bool audio = server->params.audio;
-    bool control = server->params.control;
-
-    sc_socket video_socket = SC_SOCKET_NONE;
-    sc_socket audio_socket = SC_SOCKET_NONE;
+    // Only the control socket is used (no video, no audio)
     sc_socket control_socket = SC_SOCKET_NONE;
     if (!tunnel->forward) {
-        if (video) {
-            video_socket =
-                net_accept_intr(&server->intr, tunnel->server_socket);
-            if (video_socket == SC_SOCKET_NONE) {
-                goto fail;
-            }
-        }
-
-        if (audio) {
-            audio_socket =
-                net_accept_intr(&server->intr, tunnel->server_socket);
-            if (audio_socket == SC_SOCKET_NONE) {
-                goto fail;
-            }
-        }
-
-        if (control) {
-            control_socket =
-                net_accept_intr(&server->intr, tunnel->server_socket);
-            if (control_socket == SC_SOCKET_NONE) {
-                goto fail;
-            }
+        control_socket = net_accept_intr(&server->intr, tunnel->server_socket);
+        if (control_socket == SC_SOCKET_NONE) {
+            goto fail;
         }
     } else {
         uint32_t tunnel_host = server->params.tunnel_host;
@@ -662,98 +354,36 @@ sc_server_connect_to(struct sc_server *server, struct sc_server_info *info) {
 
         unsigned attempts = 100;
         sc_tick delay = SC_TICK_FROM_MS(100);
-        sc_socket first_socket = connect_to_server(server, attempts, delay,
-                                                   tunnel_host, tunnel_port);
-        if (first_socket == SC_SOCKET_NONE) {
+        control_socket = connect_to_server(server, attempts, delay,
+                                           tunnel_host, tunnel_port);
+        if (control_socket == SC_SOCKET_NONE) {
             goto fail;
         }
-
-        if (video) {
-            video_socket = first_socket;
-        }
-
-        if (audio) {
-            if (!video) {
-                audio_socket = first_socket;
-            } else {
-                audio_socket = net_socket();
-                if (audio_socket == SC_SOCKET_NONE) {
-                    goto fail;
-                }
-                bool ok = net_connect_intr(&server->intr, audio_socket,
-                                           tunnel_host, tunnel_port);
-                if (!ok) {
-                    goto fail;
-                }
-            }
-        }
-
-        if (control) {
-            if (!video && !audio) {
-                control_socket = first_socket;
-            } else {
-                control_socket = net_socket();
-                if (control_socket == SC_SOCKET_NONE) {
-                    goto fail;
-                }
-                bool ok = net_connect_intr(&server->intr, control_socket,
-                                           tunnel_host, tunnel_port);
-                if (!ok) {
-                    goto fail;
-                }
-            }
-        }
     }
 
-    if (control_socket != SC_SOCKET_NONE) {
-        // Disable Nagle's algorithm for the control socket
-        // (it only impacts the sending side, so it is useless to set it
-        // for the other sockets)
-        bool ok = net_set_tcp_nodelay(control_socket, true);
-        (void) ok; // error already logged
-    }
+    // Disable Nagle's algorithm for the control socket
+    bool ok = net_set_tcp_nodelay(control_socket, true);
+    (void) ok; // error already logged
 
     // we don't need the adb tunnel anymore
     sc_adb_tunnel_close(tunnel, &server->intr, serial,
                         server->device_socket_name);
 
-    sc_socket first_socket = video ? video_socket
-                           : audio ? audio_socket
-                                   : control_socket;
-
-    // The sockets will be closed on stop if device_read_info() fails
-    bool ok = device_read_info(&server->intr, first_socket, info);
+    // The socket will be closed on stop if device_read_info() fails
+    server->control_socket = control_socket;
+    ok = device_read_info(&server->intr, control_socket, info);
     if (!ok) {
         goto fail;
     }
 
-    assert(!video || video_socket != SC_SOCKET_NONE);
-    assert(!audio || audio_socket != SC_SOCKET_NONE);
-    assert(!control || control_socket != SC_SOCKET_NONE);
-
-    server->video_socket = video_socket;
-    server->audio_socket = audio_socket;
-    server->control_socket = control_socket;
-
     return true;
 
 fail:
-    if (video_socket != SC_SOCKET_NONE) {
-        if (!net_close(video_socket)) {
-            LOGW("Could not close video socket");
-        }
-    }
-
-    if (audio_socket != SC_SOCKET_NONE) {
-        if (!net_close(audio_socket)) {
-            LOGW("Could not close audio socket");
-        }
-    }
-
     if (control_socket != SC_SOCKET_NONE) {
         if (!net_close(control_socket)) {
             LOGW("Could not close control socket");
         }
+        server->control_socket = SC_SOCKET_NONE;
     }
 
     if (tunnel->enabled) {
@@ -780,178 +410,6 @@ sc_server_on_terminated(void *userdata) {
     LOGD("Server terminated");
 }
 
-static uint16_t
-get_adb_tcp_port(struct sc_server *server, const char *serial) {
-    struct sc_intr *intr = &server->intr;
-
-    char *current_port =
-        sc_adb_getprop(intr, serial, "service.adb.tcp.port", SC_ADB_SILENT);
-    if (!current_port) {
-        return 0;
-    }
-
-    long value;
-    bool ok = sc_str_parse_integer(current_port, &value);
-    free(current_port);
-    if (!ok) {
-        return 0;
-    }
-
-    if (value < 0 || value > 0xFFFF) {
-        return 0;
-    }
-
-    return value;
-}
-
-static bool
-wait_tcpip_mode_enabled(struct sc_server *server, const char *serial,
-                        uint16_t expected_port, unsigned attempts,
-                        sc_tick delay) {
-    uint16_t adb_port = get_adb_tcp_port(server, serial);
-    if (adb_port == expected_port) {
-        return true;
-    }
-
-    // Only print this log if TCP/IP is not enabled
-    LOGI("Waiting for TCP/IP mode enabled...");
-
-    do {
-        sc_tick deadline = sc_tick_now() + delay;
-        if (!sc_server_sleep(server, deadline)) {
-            LOGI("TCP/IP mode waiting interrupted");
-            return false;
-        }
-
-        adb_port = get_adb_tcp_port(server, serial);
-        if (adb_port == expected_port) {
-            return true;
-        }
-    } while (--attempts);
-    return false;
-}
-
-static char *
-append_port(const char *ip, uint16_t port) {
-    char *ip_port;
-    int ret = asprintf(&ip_port, "%s:%" PRIu16, ip, port);
-    if (ret == -1) {
-        LOG_OOM();
-        return NULL;
-    }
-
-    return ip_port;
-}
-
-static char *
-sc_server_switch_to_tcpip(struct sc_server *server, const char *serial) {
-    assert(serial);
-
-    struct sc_intr *intr = &server->intr;
-
-    LOGI("Switching device %s to TCP/IP...", serial);
-
-    char *ip = sc_adb_get_device_ip(intr, serial, 0);
-    if (!ip) {
-        LOGE("Device IP not found");
-        return NULL;
-    }
-
-    uint16_t adb_port = get_adb_tcp_port(server, serial);
-    if (adb_port) {
-        LOGI("TCP/IP mode already enabled on port %" PRIu16, adb_port);
-    } else {
-        LOGI("Enabling TCP/IP mode on port " SC_STR(SC_ADB_PORT_DEFAULT) "...");
-
-        bool ok = sc_adb_tcpip(intr, serial, SC_ADB_PORT_DEFAULT,
-                               SC_ADB_NO_STDOUT);
-        if (!ok) {
-            LOGE("Could not restart adbd in TCP/IP mode");
-            free(ip);
-            return NULL;
-        }
-
-        unsigned attempts = 40;
-        sc_tick delay = SC_TICK_FROM_MS(250);
-        ok = wait_tcpip_mode_enabled(server, serial, SC_ADB_PORT_DEFAULT,
-                                     attempts, delay);
-        if (!ok) {
-            free(ip);
-            return NULL;
-        }
-
-        adb_port = SC_ADB_PORT_DEFAULT;
-        LOGI("TCP/IP mode enabled on port " SC_STR(SC_ADB_PORT_DEFAULT));
-    }
-
-    char *ip_port = append_port(ip, adb_port);
-    free(ip);
-    return ip_port;
-}
-
-static bool
-sc_server_connect_to_tcpip(struct sc_server *server, const char *ip_port,
-                           bool disconnect) {
-    struct sc_intr *intr = &server->intr;
-
-    if (disconnect) {
-        // Error expected if not connected, do not report any error
-        sc_adb_disconnect(intr, ip_port, SC_ADB_SILENT);
-    }
-
-    LOGI("Connecting to %s...", ip_port);
-
-    bool ok = sc_adb_connect(intr, ip_port, 0);
-    if (!ok) {
-        LOGE("Could not connect to %s", ip_port);
-        return false;
-    }
-
-    LOGI("Connected to %s", ip_port);
-    return true;
-}
-
-static bool
-sc_server_configure_tcpip_known_address(struct sc_server *server,
-                                        const char *addr, bool disconnect) {
-    // Append ":5555" if no port is present
-    bool contains_port = strchr(addr, ':');
-    char *ip_port = contains_port ? strdup(addr)
-                                  : append_port(addr, SC_ADB_PORT_DEFAULT);
-    if (!ip_port) {
-        LOG_OOM();
-        return false;
-    }
-
-    server->serial = ip_port;
-    return sc_server_connect_to_tcpip(server, ip_port, disconnect);
-}
-
-static bool
-sc_server_configure_tcpip_unknown_address(struct sc_server *server,
-                                          const char *serial) {
-    bool is_already_tcpip =
-        sc_adb_device_get_type(serial) == SC_ADB_DEVICE_TYPE_TCPIP;
-    if (is_already_tcpip) {
-        // Nothing to do
-        LOGI("Device already connected via TCP/IP: %s", serial);
-        server->serial = strdup(serial);
-        if (!server->serial) {
-            LOG_OOM();
-            return false;
-        }
-        return true;
-    }
-
-    char *ip_port = sc_server_switch_to_tcpip(server, serial);
-    if (!ip_port) {
-        return false;
-    }
-
-    server->serial = ip_port;
-    return sc_server_connect_to_tcpip(server, ip_port, false);
-}
-
 static void
 sc_server_kill_adb_if_requested(struct sc_server *server) {
     if (server->params.kill_adb_on_close) {
@@ -976,77 +434,32 @@ run_server(void *data) {
         goto error_connection_failed;
     }
 
-    // params->tcpip_dst implies params->tcpip
-    assert(!params->tcpip_dst || params->tcpip);
-
-    // If tcpip_dst parameter is given, then it must connect to this address.
-    // Therefore, the device is unknown, so serial is meaningless at this point.
-    assert(!params->req_serial || !params->tcpip_dst);
-
-    // A device must be selected via a serial in all cases except when --tcpip=
-    // is called with a parameter (in that case, the device may initially not
-    // exist, and scrcpy will execute "adb connect").
-    bool need_initial_serial = !params->tcpip_dst;
-
-    if (need_initial_serial) {
-        // At most one of the 3 following parameters may be set
-        assert(!!params->req_serial
-               + params->select_usb
-               + params->select_tcpip <= 1);
-
-        struct sc_adb_device_selector selector;
-        if (params->req_serial) {
-            selector.type = SC_ADB_DEVICE_SELECT_SERIAL;
-            selector.serial = params->req_serial;
-        } else if (params->select_usb) {
-            selector.type = SC_ADB_DEVICE_SELECT_USB;
-        } else if (params->select_tcpip) {
-            selector.type = SC_ADB_DEVICE_SELECT_TCPIP;
-        } else {
-            // No explicit selection, check $ANDROID_SERIAL
-            const char *env_serial = getenv("ANDROID_SERIAL");
-            if (env_serial) {
-                LOGI("Using ANDROID_SERIAL: %s", env_serial);
-                selector.type = SC_ADB_DEVICE_SELECT_SERIAL;
-                selector.serial = env_serial;
-            } else {
-                selector.type = SC_ADB_DEVICE_SELECT_ALL;
-            }
-        }
-        struct sc_adb_device device;
-        ok = sc_adb_select_device(&server->intr, &selector, 0, &device);
-        if (!ok) {
-            goto error_connection_failed;
-        }
-
-        if (params->tcpip) {
-            assert(!params->tcpip_dst);
-            ok = sc_server_configure_tcpip_unknown_address(server,
-                                                           device.serial);
-            sc_adb_device_destroy(&device);
-            if (!ok) {
-                goto error_connection_failed;
-            }
-            assert(server->serial);
-        } else {
-            // "move" the device.serial without copy
-            server->serial = device.serial;
-            // the serial must not be freed by the destructor
-            device.serial = NULL;
-            sc_adb_device_destroy(&device);
-        }
+    struct sc_adb_device_selector selector;
+    if (params->req_serial) {
+        selector.type = SC_ADB_DEVICE_SELECT_SERIAL;
+        selector.serial = params->req_serial;
     } else {
-        // If the user passed a '+' (--tcpip=+ip), then disconnect first
-        const char *tcpip_dst = params->tcpip_dst;
-        bool plus = tcpip_dst[0] == '+';
-        if (plus) {
-            ++tcpip_dst;
-        }
-        ok = sc_server_configure_tcpip_known_address(server, tcpip_dst, plus);
-        if (!ok) {
-            goto error_connection_failed;
+        // No explicit selection, check $ANDROID_SERIAL
+        const char *env_serial = getenv("ANDROID_SERIAL");
+        if (env_serial) {
+            LOGI("Using ANDROID_SERIAL: %s", env_serial);
+            selector.type = SC_ADB_DEVICE_SELECT_SERIAL;
+            selector.serial = env_serial;
+        } else {
+            selector.type = SC_ADB_DEVICE_SELECT_ALL;
         }
     }
+    struct sc_adb_device device;
+    ok = sc_adb_select_device(&server->intr, &selector, 0, &device);
+    if (!ok) {
+        goto error_connection_failed;
+    }
+
+    // "move" the device.serial without copy
+    server->serial = device.serial;
+    // the serial must not be freed by the destructor
+    device.serial = NULL;
+    sc_adb_device_destroy(&device);
 
     const char *serial = server->serial;
     assert(serial);
@@ -1055,20 +468,6 @@ run_server(void *data) {
     ok = push_server(&server->intr, serial);
     if (!ok) {
         goto error_connection_failed;
-    }
-
-    // If --list-* is passed, then the server just prints the requested data
-    // then exits.
-    if (params->list) {
-        sc_pid pid = execute_server(server, params);
-        if (pid == SC_PROCESS_NONE) {
-            goto error_connection_failed;
-        }
-        sc_process_wait(pid, NULL); // ignore exit code
-        sc_process_close(pid);
-        // Wake up await_for_server()
-        server->cbs->on_connected(server, server->cbs_userdata);
-        return 0;
     }
 
     int r = asprintf(&server->device_socket_name, SC_SOCKET_NAME_PREFIX "%08x",
@@ -1130,18 +529,7 @@ run_server(void *data) {
 
     // Interrupt sockets to wake up socket blocking calls on the server
 
-    if (server->video_socket != SC_SOCKET_NONE) {
-        // There is no video_socket if --no-video is set
-        net_interrupt(server->video_socket);
-    }
-
-    if (server->audio_socket != SC_SOCKET_NONE) {
-        // There is no audio_socket if --no-audio is set
-        net_interrupt(server->audio_socket);
-    }
-
     if (server->control_socket != SC_SOCKET_NONE) {
-        // There is no control_socket if --no-control is set
         net_interrupt(server->control_socket);
     }
 
@@ -1204,12 +592,6 @@ sc_server_join(struct sc_server *server) {
 
 void
 sc_server_destroy(struct sc_server *server) {
-    if (server->video_socket != SC_SOCKET_NONE) {
-        net_close(server->video_socket);
-    }
-    if (server->audio_socket != SC_SOCKET_NONE) {
-        net_close(server->audio_socket);
-    }
     if (server->control_socket != SC_SOCKET_NONE) {
         net_close(server->control_socket);
     }

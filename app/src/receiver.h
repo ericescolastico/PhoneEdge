@@ -5,8 +5,6 @@
 
 #include <stdbool.h>
 
-#include "uhid/uhid_output.h"
-#include "util/acksync.h"
 #include "util/net.h"
 #include "util/thread.h"
 
@@ -16,9 +14,6 @@ struct sc_receiver {
     sc_socket control_socket;
     sc_thread thread;
     sc_mutex mutex;
-
-    struct sc_acksync *acksync;
-    struct sc_uhid_devices *uhid_devices;
 
     const struct sc_receiver_callbacks *cbs;
     void *cbs_userdata;

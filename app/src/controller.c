@@ -70,14 +70,6 @@ sc_controller_init(struct sc_controller *controller, sc_socket control_socket,
 }
 
 void
-sc_controller_configure(struct sc_controller *controller,
-                        struct sc_acksync *acksync,
-                        struct sc_uhid_devices *uhid_devices) {
-    controller->receiver.acksync = acksync;
-    controller->receiver.uhid_devices = uhid_devices;
-}
-
-void
 sc_controller_destroy(struct sc_controller *controller) {
     sc_cond_destroy(&controller->msg_cond);
     sc_mutex_destroy(&controller->mutex);
