@@ -191,6 +191,52 @@ def test_viewport_rotation_and_fallbacks(exe):
     check("Phone screen: 720x1560 (from the configuration)" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
 
 
+def test_config_file_and_cli_override(exe):
+    with tempfile.TemporaryDirectory() as tmp:
+        ini = os.path.join(tmp, "my.ini")
+        with open(ini, "w") as f:
+            f.write("[phoneedge]\nedge = left\nmonitor = 0\npointer_scale = 1.5\n"
+                    "hotkey = ctrl+shift+f12\n")
+        proc, log = run(exe, "sleep 50\nquit\n",
+                        args=("--config", ini, "--pointer-scale", "2.0"))
+        out = proc.stdout + proc.stderr
+        check(proc.returncode == 0, out)
+        check("Configuration loaded from" in out, out)
+        # the ini is applied, then the command line overrides it
+        check("edge=left" in out and "pointer_scale=2.00" in out, out)
+        check("hotkey=Ctrl+Shift+F12" in out, out)
+        proc, _ = run(exe, "quit\n", args=("--config", os.path.join(tmp, "nope.ini")))
+        check(proc.returncode != 0, "a missing config must be an error")
+
+
+def test_debug_log_file(exe):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "debug.log")
+        proc, _ = run(exe, "move 20 0 1919 540\nsleep 30\nmove 20 0 1919 540\nsleep 200\nquit\n",
+                      args=("--debug-log", path))
+        check(proc.returncode == 0, proc.stdout + proc.stderr)
+        text = open(path).read()
+        check("Config: edge=right" in text, text)
+        check("Control moved to the phone" in text, text)
+        check("Control back to the PC: release" in text, text)
+        check("] DEBUG:" in text and text.lstrip().startswith("["), text[:200])
+
+
+def test_dry_run_without_adb(exe):
+    # no phone, no adb: the ADB variable points to nothing
+    with tempfile.TemporaryDirectory() as tmp:
+        script = os.path.join(tmp, "s.txt")
+        with open(script, "w") as f:
+            f.write("move 20 0 1919 540\nsleep 30\nmove 20 0 1919 540\nsleep 100\nstate\nquit\n")
+        env = dict(os.environ, ADB="/nonexistent/adb")
+        proc = subprocess.run([exe, "--dry-run", "--script", script], env=env,
+                              capture_output=True, text=True, timeout=30)
+        out = proc.stdout + proc.stderr
+        check(proc.returncode == 0, f"exit code {proc.returncode}\n{out}")
+        check("Modo de teste (--dry-run)" in out, out)
+        check("Control moved to the phone" in out and "phone_active=1" in out, out)
+
+
 def test_bad_script_line(exe):
     proc, log = run(exe, "bogus command\nquit\n")
     check("invalid command" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
@@ -202,6 +248,9 @@ TESTS = [
     test_hotkey_releases_everything,
     test_disconnect_returns_mouse,
     test_viewport_rotation_and_fallbacks,
+    test_config_file_and_cli_override,
+    test_debug_log_file,
+    test_dry_run_without_adb,
 ]
 
 

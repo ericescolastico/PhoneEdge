@@ -23,6 +23,7 @@
  *     quit                     exit the application
  */
 
+#include <stdatomic.h>
 #include <stdbool.h>
 
 #include "pe/pe_session.h"
@@ -33,7 +34,7 @@ struct pe_script {
     char *path;
     sc_thread thread;
     bool started;
-    volatile bool stop;
+    atomic_bool stop;
 };
 
 bool

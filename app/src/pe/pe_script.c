@@ -159,7 +159,7 @@ run_script(void *data) {
     uint64_t clock = 1000;
     char line[256];
     unsigned lineno = 0;
-    while (!sc->stop && fgets(line, sizeof(line), f)) {
+    while (!atomic_load(&sc->stop) && fgets(line, sizeof(line), f)) {
         ++lineno;
         if (!pe_script_run_line(sc->session, &clock, line)) {
             LOGE("%s:%u: invalid command", sc->path, lineno);
@@ -177,7 +177,7 @@ pe_script_init(struct pe_script *sc, struct pe_session *session,
     sc->session = session;
     sc->path = strdup(path);
     sc->started = false;
-    sc->stop = false;
+    atomic_init(&sc->stop, false);
     return sc->path != NULL;
 }
 
@@ -192,7 +192,7 @@ pe_script_start(struct pe_script *sc) {
 
 void
 pe_script_stop(struct pe_script *sc) {
-    sc->stop = true;
+    atomic_store(&sc->stop, true);
 }
 
 void
