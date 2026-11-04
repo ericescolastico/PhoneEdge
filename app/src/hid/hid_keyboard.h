@@ -13,7 +13,10 @@
 // Maybe SDL_Keycode is used by most people, but SDL_Scancode is taken from USB
 // HID protocol.
 // 0x65 is Application, typically AT-101 Keyboard ends here.
-#define SC_HID_KEYBOARD_KEYS 0x66
+// PhoneEdge extends the range up to 0x8B (International5) so that the
+// ABNT2/JIS extra keys work: 0x85 (Keypad Comma, the ABNT2 numpad '.') and
+// 0x87 (International1, the ABNT2 '/ ?' key).
+#define SC_HID_KEYBOARD_KEYS 0x8C
 
 #define SC_HID_ID_KEYBOARD 1
 

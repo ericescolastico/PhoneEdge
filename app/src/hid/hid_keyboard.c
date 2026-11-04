@@ -108,12 +108,13 @@ static const uint8_t SC_HID_KEYBOARD_REPORT_DESC[] = {
     0x05, 0x07,
     // Usage Minimum (0)
     0x19, 0x00,
-    // Usage Maximum (101)
+    // Usage Maximum (139)
     0x29, SC_HID_KEYBOARD_KEYS - 1,
     // Logical Minimum (0)
     0x15, 0x00,
-    // Logical Maximum(101)
-    0x25, SC_HID_KEYBOARD_KEYS - 1,
+    // Logical Maximum (139), on 2 bytes because 0x8B does not fit in a signed
+    // byte
+    0x26, SC_HID_KEYBOARD_KEYS - 1, 0x00,
     // Report Size (8)
     0x75, 0x08,
     // Report Count (6)
