@@ -292,6 +292,75 @@ static void test_get_ip_truncated(void) {
     assert(!ip);
 }
 
+static void test_wm_size_physical(void) {
+    int w, h;
+    assert(sc_adb_parse_wm_size("Physical size: 1080x2340\n", &w, &h));
+    assert(w == 1080 && h == 2340);
+}
+
+static void test_wm_size_override_wins(void) {
+    int w, h;
+    assert(sc_adb_parse_wm_size("Physical size: 1080x2340\r\n"
+                                "Override size: 720x1560\r\n", &w, &h));
+    assert(w == 720 && h == 1560);
+    // order does not matter
+    assert(sc_adb_parse_wm_size("Override size: 720x1560\n"
+                                "Physical size: 1080x2340\n", &w, &h));
+    assert(w == 720 && h == 1560);
+}
+
+static void test_wm_size_garbage(void) {
+    int w = 7, h = 7;
+    assert(!sc_adb_parse_wm_size("", &w, &h));
+    assert(!sc_adb_parse_wm_size("error: closed\n", &w, &h));
+    assert(!sc_adb_parse_wm_size("Physical size: abc\n", &w, &h));
+    assert(!sc_adb_parse_wm_size("Physical size: 0x0\n", &w, &h));
+    assert(w == 7 && h == 7);
+}
+
+static void test_viewport_android12(void) {
+    const char *dump =
+        "Input Dispatcher State:\n"
+        "  Viewports:\n"
+        "    Viewport EXTERNAL: displayId=2, uniqueId=x, orientation=0, "
+            "logicalFrame=[0, 0, 100, 100], isActive=[1]\n"
+        "    Viewport INTERNAL: displayId=0, uniqueId=local:46198, port=129, "
+            "orientation=1, logicalFrame=[0, 0, 2340, 1080], "
+            "physicalFrame=[0, 0, 2340, 1080], deviceSize=[1080, 2340], "
+            "isActive=[1]\n";
+    int w, h, o;
+    assert(sc_adb_parse_input_viewport(dump, &w, &h, &o));
+    assert(w == 2340 && h == 1080 && o == 1);
+}
+
+static void test_viewport_android14(void) {
+    const char *dump =
+        "  DisplayViewport{type=INTERNAL, valid=true, isActive=true, "
+            "displayId=0, uniqueId=local:4619827259835644672, port=129, "
+            "orientation=0, logicalFrame=[0, 0, 1080, 2340], "
+            "physicalFrame=[0, 0, 1080, 2340], deviceSize=[1080, 2340]}\n";
+    int w, h, o;
+    assert(sc_adb_parse_input_viewport(dump, &w, &h, &o));
+    assert(w == 1080 && h == 2340 && o == 0);
+}
+
+static void test_viewport_missing(void) {
+    int w, h, o;
+    assert(!sc_adb_parse_input_viewport("nothing here\n", &w, &h, &o));
+    assert(!sc_adb_parse_input_viewport(
+        "Viewport EXTERNAL: displayId=2, logicalFrame=[0, 0, 1, 1]\n",
+        &w, &h, &o));
+}
+
+static void test_surface_orientation(void) {
+    int o;
+    assert(sc_adb_parse_surface_orientation(
+        "  SurfaceWidth: 1080px\n  SurfaceOrientation: 3\n", &o));
+    assert(o == 3);
+    assert(!sc_adb_parse_surface_orientation("SurfaceOrientation: 9\n", &o));
+    assert(!sc_adb_parse_surface_orientation("", &o));
+}
+
 int main(int argc, char *argv[]) {
     (void) argc;
     (void) argv;
@@ -316,6 +385,14 @@ int main(int argc, char *argv[]) {
     test_get_ip_no_wlan();
     test_get_ip_no_wlan_without_eol();
     test_get_ip_truncated();
+
+    test_wm_size_physical();
+    test_wm_size_override_wins();
+    test_wm_size_garbage();
+    test_viewport_android12();
+    test_viewport_android14();
+    test_viewport_missing();
+    test_surface_orientation();
 
     return 0;
 }

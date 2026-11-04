@@ -1,6 +1,7 @@
 #include "adb_parser.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -259,4 +260,135 @@ sc_adb_parse_device_ip(char *str) {
     }
 
     return NULL;
+}
+
+static bool
+parse_size_after(const char *line, const char *label, int *w, int *h) {
+    const char *p = strstr(line, label);
+    if (!p) {
+        return false;
+    }
+    p += strlen(label);
+    char *end;
+    long width = strtol(p, &end, 10);
+    if (end == p || *end != 'x') {
+        return false;
+    }
+    p = end + 1;
+    long height = strtol(p, &end, 10);
+    if (end == p || width <= 0 || height <= 0 || width > 100000
+            || height > 100000) {
+        return false;
+    }
+    *w = (int) width;
+    *h = (int) height;
+    return true;
+}
+
+bool
+sc_adb_parse_wm_size(const char *str, int *width, int *height) {
+    bool found = false;
+    int w = 0;
+    int h = 0;
+
+    // Walk the lines: "Override size" wins over "Physical size"
+    const char *p = str;
+    while (*p) {
+        size_t len = strcspn(p, "\r\n");
+        char line[128];
+        if (len < sizeof(line)) {
+            memcpy(line, p, len);
+            line[len] = '\0';
+            int lw, lh;
+            if (parse_size_after(line, "Override size:", &lw, &lh)) {
+                *width = lw;
+                *height = lh;
+                return true;
+            }
+            if (!found && parse_size_after(line, "Physical size:", &lw, &lh)) {
+                w = lw;
+                h = lh;
+                found = true;
+            }
+        }
+        p += len;
+        p += strspn(p, "\r\n");
+    }
+
+    if (found) {
+        *width = w;
+        *height = h;
+    }
+    return found;
+}
+
+// Parse "key=" followed by an integer in `line`
+static bool
+parse_int_field(const char *line, const char *key, int *out) {
+    const char *p = strstr(line, key);
+    if (!p) {
+        return false;
+    }
+    p += strlen(key);
+    char *end;
+    long v = strtol(p, &end, 10);
+    if (end == p) {
+        return false;
+    }
+    *out = (int) v;
+    return true;
+}
+
+bool
+sc_adb_parse_input_viewport(const char *str, int *width, int *height,
+                            int *orientation) {
+    const char *p = str;
+    while (*p) {
+        size_t len = strcspn(p, "\r\n");
+        char line[1024];
+        if (len < sizeof(line)) {
+            memcpy(line, p, len);
+            line[len] = '\0';
+
+            const char *frame = strstr(line, "logicalFrame=[");
+            if (strstr(line, "INTERNAL") && frame) {
+                int display_id;
+                bool has_id = parse_int_field(line, "displayId=", &display_id);
+                if (!has_id || display_id == 0) {
+                    int l, t, r, b;
+                    if (sscanf(frame, "logicalFrame=[%d, %d, %d, %d]",
+                               &l, &t, &r, &b) == 4
+                            && r > l && b > t) {
+                        int o;
+                        if (!parse_int_field(line, "orientation=", &o)) {
+                            o = -1;
+                        }
+                        *width = r - l;
+                        *height = b - t;
+                        *orientation = o;
+                        return true;
+                    }
+                }
+            }
+        }
+        p += len;
+        p += strspn(p, "\r\n");
+    }
+    return false;
+}
+
+bool
+sc_adb_parse_surface_orientation(const char *str, int *orientation) {
+    const char *p = strstr(str, "SurfaceOrientation:");
+    if (!p) {
+        return false;
+    }
+    p += strlen("SurfaceOrientation:");
+    char *end;
+    long v = strtol(p, &end, 10);
+    if (end == p || v < 0 || v > 3) {
+        return false;
+    }
+    *orientation = (int) v;
+    return true;
 }

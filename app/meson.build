@@ -9,6 +9,10 @@ src = [
     'src/control_msg.c',
     'src/controller.c',
     'src/device_msg.c',
+    'src/edge/pe_config.c',
+    'src/edge/pe_edge.c',
+    'src/edge/pe_keymap.c',
+    'src/edge/pe_vpos.c',
     'src/events.c',
     'src/options.c',
     'src/receiver.c',
@@ -73,6 +77,8 @@ static = get_option('static')
 
 dependencies = [
     dependency('sdl3', version: '>= 3.2.0', static: static),
+    # "required: false" because libm may be part of libc itself
+    cc.find_library('m', required: false),
 ]
 
 if host_machine.system() == 'windows'
@@ -169,6 +175,26 @@ if get_option('buildtype') == 'debug'
         ['test_device_msg_deserialize', [
             'tests/test_device_msg_deserialize.c',
             'src/device_msg.c',
+        ]],
+        ['test_pe_edge', [
+            'tests/test_pe_edge.c',
+            'src/edge/pe_config.c',
+            'src/edge/pe_edge.c',
+            'src/edge/pe_keymap.c',
+            'src/edge/pe_vpos.c',
+        ]],
+        ['test_pe_keymap', [
+            'tests/test_pe_keymap.c',
+            'src/edge/pe_keymap.c',
+        ]],
+        ['test_pe_config', [
+            'tests/test_pe_config.c',
+            'src/edge/pe_config.c',
+            'src/edge/pe_keymap.c',
+        ]],
+        ['test_pe_vpos', [
+            'tests/test_pe_vpos.c',
+            'src/edge/pe_vpos.c',
         ]],
         ['test_hid_keyboard', [
             'tests/test_hid_keyboard.c',
