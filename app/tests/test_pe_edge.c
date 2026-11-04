@@ -10,12 +10,24 @@
 #define W 1080
 #define H 2340
 
+// The values the geometry tests were written for (the shipped defaults are
+// tuned for a real phone: larger insets, accelerated positioning, soft re-entry)
+static void
+legacy(struct pe_config *cfg) {
+    cfg->entry_inset = 24;
+    cfg->leave_margin = 24;
+    cfg->place_scale = 1.0f;
+    cfg->reanchor_entries = 0;
+    cfg->altgr = false;
+}
+
 static const struct pe_rect MON_A = {0, 0, 1920, 1080};
 
 static void
 setup(struct pe_edge *e, enum pe_side edge) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.edge = edge;
     cfg.phone_size_auto = false;
     cfg.phone_width = W;
@@ -327,6 +339,7 @@ static void test_flush_rate_and_tick(void) {
 static void test_sensitivity_residual(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.sensitivity = 0.5f;
     cfg.phone_size_auto = false;
     struct pe_edge e;
@@ -349,7 +362,9 @@ static void test_sensitivity_residual(void) {
 static void test_pointer_scale(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.pointer_scale = 2.0f;
+    cfg.place_scale = 2.0f;
     cfg.phone_size_auto = false;
     struct pe_edge e;
     pe_edge_init(&e, &cfg);
@@ -391,6 +406,7 @@ static void test_enter_guard_and_margin(void) {
 static void test_leave_margin_resets_when_moving_away(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.phone_size_auto = false;
     cfg.enter_guard_ms = 0;
     cfg.leave_margin = 30;
@@ -662,6 +678,7 @@ static void test_hotkey_on_pc_and_other_chords(void) {
 static void test_custom_hotkey(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     char err[64];
     assert(pe_hotkey_parse("ctrl+shift+f12", &cfg.hotkey, err, sizeof(err)));
     struct pe_edge e;
@@ -754,6 +771,7 @@ static void test_no_entry_without_phone_size(void) {
 static void test_rotation_swaps_size(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.phone_size_auto = false;
     cfg.phone_rotation = 90;
     struct pe_edge e;
@@ -765,6 +783,7 @@ static void test_rotation_swaps_size(void) {
 static void test_extreme_config_fits_action_budget(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.phone_size_auto = false;
     cfg.phone_width = 10000;
     cfg.phone_height = 10000;
@@ -815,6 +834,7 @@ static void test_blocked_push_is_not_remembered(void) {
 static void test_return_inset_is_clamped(void) {
     struct pe_config cfg;
     pe_config_defaults(&cfg);
+    legacy(&cfg);
     cfg.phone_size_auto = false;
     cfg.return_inset = 0; // not reachable through pe_config_set
     struct pe_edge e;
@@ -926,6 +946,226 @@ static void test_keys_held_across_the_handoff(void) {
     assert(!res.swallow);
 }
 
+
+static void test_defaults_are_comfortable(void) {
+    struct pe_config c;
+    pe_config_defaults(&c);
+    // leaving needs a deliberate push, and the pointer appears well inside
+    assert(c.entry_inset >= 40 && c.leave_margin >= 80);
+    assert(c.place_scale == 3.0f && c.reanchor_entries == 6 && c.altgr);
+}
+
+static void test_place_scale_positioning(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.place_scale = 3.0f;
+    cfg.entry_inset = 24;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.25f, &res);
+
+    // The positioning reports move 3 px per unit: 3x fewer units than pixels,
+    // and the estimate still lands on the entry point
+    int ax, ay;
+    sum_moves(&res, true, &ax, &ay);
+    float x, y;
+    pe_edge_get_vpos(&e, &x, &y);
+    assert(fabsf(x - 24) < 3.5f);
+    assert(fabsf(y - res.actions[0].enter.ratio * (H - 1)) < 3.5f);
+    // anchoring sums -127 * n; the positioning part is what remains
+    int placement_x = 0;
+    int seen_anchor_end = 0;
+    for (unsigned i = 1; i < res.count; ++i) {
+        const struct pe_action *a = &res.actions[i];
+        if (a->move.dx != -127 || a->move.dy != -127) {
+            seen_anchor_end = 1;
+        }
+        if (seen_anchor_end) {
+            placement_x += a->move.dx;
+        }
+    }
+    assert(placement_x > 5 && placement_x < 12); // ~24 px / 3
+}
+
+static void test_soft_reentry_does_not_fly_to_a_corner(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.place_scale = 1.0f;
+    cfg.entry_inset = 24;
+    cfg.leave_margin = 24;
+    cfg.reanchor_entries = 3;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+
+    // first entry: anchored to a corner
+    enter(&e, PE_SIDE_RIGHT, 0.25f, &res);
+    assert(res.actions[1].move.dx == -127 && res.actions[1].move.dy == -127);
+    unsigned first = res.count;
+    assert(first > 20);
+
+    // come back, then enter again at a similar height
+    const struct pe_action *l = push_back(&e, PE_SIDE_RIGHT, T0 + 400, 2000,
+                                          &res);
+    assert(l);
+    uint64_t t = g_leave_time + 1000;
+    pe_edge_on_mouse_move(&e, t, 30, 0, 1919, 300, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+    // soft: a few reports from where the pointer was left, no anchoring
+    assert(res.count < 10);
+    for (unsigned i = 1; i < res.count; ++i) {
+        assert(!(res.actions[i].move.dx == -127
+                 && res.actions[i].move.dy == -127));
+    }
+    float x, y;
+    pe_edge_get_vpos(&e, &x, &y);
+    assert(fabsf(x - 24) < 1.5f);
+    assert(fabsf(y - res.actions[0].enter.ratio * (H - 1)) < 1.5f);
+
+    // after reanchor_entries entries, it anchors again
+    for (int i = 0; i < 3; ++i) {
+        l = push_back(&e, PE_SIDE_RIGHT, t + 400, 2000, &res);
+        assert(l);
+        t = g_leave_time + 1000;
+        pe_edge_on_mouse_move(&e, t, 30, 0, 1919, 300 + i, &res);
+        assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+        if (i == 2) {
+            assert(res.count > 20);
+        }
+    }
+}
+
+static void test_reanchor_after_time(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.reanchor_s = 5;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    const struct pe_action *l = push_back(&e, PE_SIDE_RIGHT, T0 + 400, 8000,
+                                          &res);
+    assert(l);
+    uint64_t t = g_leave_time + 6000; // more than 5 s after the anchoring
+    pe_edge_on_mouse_move(&e, t, 30, 0, 1919, 500, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PHONE_ACTIVE);
+    assert(res.count > 20);
+}
+
+static const struct pe_action *
+last_key(const struct pe_result *res, unsigned *count) {
+    const struct pe_action *last = NULL;
+    *count = 0;
+    for (unsigned i = 0; i < res->count; ++i) {
+        if (res->actions[i].type == PE_ACT_PHONE_KEY) {
+            last = &res->actions[i];
+            ++*count;
+        }
+    }
+    return last;
+}
+
+static void test_ctrl_alt_is_altgr(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    unsigned n;
+
+    // Ctrl then Alt (how ABNT2 users type AltGr+W = '?'): the phone gets
+    // Ctrl down, then Ctrl up + RAlt down
+    pe_edge_on_key(&e, T0 + 100, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 101, 0xE2, true, &res);
+    const struct pe_action *k = last_key(&res, &n);
+    assert(n == 2 && k->key.scancode == 0xE6 && k->key.down);
+    assert(k->key.mods == PE_HID_RALT);
+    assert(res.actions[0].key.scancode == 0xE0 && !res.actions[0].key.down);
+
+    // 'w' carries AltGr only
+    pe_edge_on_key(&e, T0 + 102, 0x1A, true, &res);
+    k = last_key(&res, &n);
+    assert(k->key.scancode == 0x1A && k->key.mods == PE_HID_RALT);
+    pe_edge_on_key(&e, T0 + 103, 0x1A, false, &res);
+
+    // releasing Ctrl first changes nothing; releasing Alt releases AltGr
+    pe_edge_on_key(&e, T0 + 104, 0xE0, false, &res);
+    assert(res.swallow && res.count == 0);
+    pe_edge_on_key(&e, T0 + 105, 0xE2, false, &res);
+    k = last_key(&res, &n);
+    assert(n == 1 && k->key.scancode == 0xE6 && !k->key.down && k->key.mods == 0);
+
+    // Alt then Ctrl works too
+    pe_edge_on_key(&e, T0 + 200, 0xE2, true, &res);
+    pe_edge_on_key(&e, T0 + 201, 0xE0, true, &res);
+    k = last_key(&res, &n);
+    assert(n == 2 && k->key.scancode == 0xE6 && k->key.down);
+    // Alt released while Ctrl is still held: Ctrl comes back
+    pe_edge_on_key(&e, T0 + 202, 0xE2, false, &res);
+    k = last_key(&res, &n);
+    assert(n == 2 && k->key.scancode == 0xE0 && k->key.down);
+    assert(k->key.mods == PE_HID_LCTRL);
+
+    // a real AltGr (right Alt) is untouched, and Ctrl alone is a Ctrl
+    pe_edge_on_key(&e, T0 + 300, 0xE0, false, &res);
+    pe_edge_on_key(&e, T0 + 301, 0xE6, true, &res);
+    k = last_key(&res, &n);
+    assert(n == 1 && k->key.scancode == 0xE6 && k->key.mods == PE_HID_RALT);
+    pe_edge_on_key(&e, T0 + 302, 0xE6, false, &res);
+    pe_edge_on_key(&e, T0 + 303, 0xE0, true, &res);
+    k = last_key(&res, &n);
+    assert(n == 1 && k->key.scancode == 0xE0);
+    pe_edge_on_key(&e, T0 + 304, 0x06, true, &res); // Ctrl+C stays Ctrl+C
+    k = last_key(&res, &n);
+    assert(k->key.mods == PE_HID_LCTRL);
+}
+
+static void test_altgr_translation_can_be_disabled_and_released(void) {
+    struct pe_config cfg;
+    pe_config_defaults(&cfg);
+    cfg.phone_size_auto = false;
+    cfg.altgr = false;
+    struct pe_edge e;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    struct pe_result res;
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    unsigned n;
+    pe_edge_on_key(&e, T0 + 100, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 101, 0xE2, true, &res);
+    const struct pe_action *k = last_key(&res, &n);
+    assert(n == 1 && k->key.scancode == 0xE2 && k->key.mods == 5);
+
+    // AltGr active when the emergency shortcut leaves: RAlt is released
+    cfg.altgr = true;
+    pe_edge_init(&e, &cfg);
+    pe_edge_set_monitors(&e, &MON_A, 1, 0);
+    enter(&e, PE_SIDE_RIGHT, 0.5f, &res);
+    pe_edge_on_key(&e, T0 + 100, 0xE0, true, &res);
+    pe_edge_on_key(&e, T0 + 101, 0xE2, true, &res);
+    pe_edge_on_key(&e, T0 + 102, PE_SC_PAUSE, true, &res);
+    assert(pe_edge_state(&e) == PE_STATE_PC_ACTIVE);
+    bool ralt_released = false;
+    for (unsigned i = 0; i < res.count; ++i) {
+        if (res.actions[i].type == PE_ACT_PHONE_KEY
+                && res.actions[i].key.scancode == 0xE6
+                && !res.actions[i].key.down) {
+            ralt_released = true;
+        }
+    }
+    assert(ralt_released);
+}
+
 static void test_unmapped_keys_are_left_to_the_pc(void) {
     struct pe_edge e;
     setup(&e, PE_SIDE_RIGHT);
@@ -988,6 +1228,9 @@ static void test_random_sequences(void) {
     for (uint32_t seed = 1; seed <= 60; ++seed) {
         struct pe_edge e;
         setup(&e, (enum pe_side) (seed % 4));
+        // half of the runs with the AltGr translation and soft re-entry
+        e.cfg.altgr = seed % 2;
+        e.cfg.reanchor_entries = (int) (seed % 3) * 2;
         struct fuzz f = {.seed = seed * 7919u};
         struct pe_result res;
         uint64_t t = 1000;
@@ -1100,6 +1343,12 @@ int main(int argc, char *argv[]) {
     test_hotkey_when_pause_release_is_never_delivered();
     test_keys_held_across_the_handoff();
     test_unmapped_keys_are_left_to_the_pc();
+    test_defaults_are_comfortable();
+    test_place_scale_positioning();
+    test_soft_reentry_does_not_fly_to_a_corner();
+    test_reanchor_after_time();
+    test_ctrl_alt_is_altgr();
+    test_altgr_translation_can_be_disabled_and_released();
     test_random_sequences();
     return 0;
 }

@@ -133,6 +133,20 @@ def main():
                   f"physicalFrame=[0, 0, {w}, {h}], "
                   f"deviceSize=[{w}, {h}], isActive=[1]")
             return 0
+        if rest[:1] == ["settings"]:
+            path = os.path.join(STATE, "settings.json")
+            data = json.load(open(path)) if os.path.exists(path) else {"pointer_speed": "0"}
+            op, key = rest[1], rest[3]
+            if op == "get":
+                print(data.get(key, "null"))
+            elif op == "put":
+                data[key] = rest[4]
+                log({"event": "settings_put", "key": key, "value": rest[4]})
+            elif op == "delete":
+                data.pop(key, None)
+                log({"event": "settings_delete", "key": key})
+            json.dump(data, open(path, "w"))
+            return 0
         if rest and rest[0].startswith("CLASSPATH="):
             return run_server(rest)
         return 0

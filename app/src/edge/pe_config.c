@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stddef.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,14 +25,20 @@ pe_config_defaults(struct pe_config *cfg) {
     cfg->hotkey.mods = PE_MOD_CTRL | PE_MOD_ALT;
     cfg->hotkey.key = PE_SC_PAUSE;
     cfg->edge_push = 12;
-    cfg->leave_margin = 24;
-    cfg->entry_inset = 24;
+    cfg->leave_margin = 100;
+    cfg->entry_inset = 60;
     cfg->return_inset = 3; // must stay above the edge zone (see pe_edge.c)
     cfg->flush_ms = 8;
     cfg->enter_guard_ms = 300;
     cfg->reenter_ms = 300;
     cfg->anchor_extra = 3;
     cfg->place_delay_ms = 2;
+    cfg->place_scale = 3.0f;
+    cfg->reanchor_entries = 6;
+    cfg->reanchor_s = 120;
+    cfg->altgr = true;
+    cfg->android_accel_off = false;
+    cfg->android_pointer_speed = PE_POINTER_SPEED_KEEP;
     cfg->clip_cursor = false;
 }
 
@@ -209,12 +216,40 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
         return PE_SET_OK;
     }
 
-    if (!strcmp(key, "clip_cursor")) {
-        if (!pe_parse_bool(value, &cfg->clip_cursor)) {
-            set_err(err, errlen, "%s: expected yes or no, got \"%s\"", key,
-                    value);
+    {
+        static const struct {
+            const char *name;
+            size_t offset;
+        } bools[] = {
+            {"clip_cursor", offsetof(struct pe_config, clip_cursor)},
+            {"altgr", offsetof(struct pe_config, altgr)},
+            {"android_accel_off", offsetof(struct pe_config, android_accel_off)},
+        };
+        for (size_t i = 0; i < sizeof(bools) / sizeof(bools[0]); ++i) {
+            if (!strcmp(key, bools[i].name)) {
+                if (!pe_parse_bool(value, (bool *) ((char *) cfg
+                                                    + bools[i].offset))) {
+                    set_err(err, errlen, "%s: expected yes or no, got \"%s\"",
+                            key, value);
+                    return PE_SET_INVALID_VALUE;
+                }
+                return PE_SET_OK;
+            }
+        }
+    }
+
+    if (!strcmp(key, "android_pointer_speed")) {
+        long v;
+        if (!strcmp(value, "keep")) {
+            cfg->android_pointer_speed = PE_POINTER_SPEED_KEEP;
+            return PE_SET_OK;
+        }
+        if (!parse_int(value, -7, 7, &v)) {
+            set_err(err, errlen, "%s: expected keep or -7..7, got \"%s\"",
+                    key, value);
             return PE_SET_INVALID_VALUE;
         }
+        cfg->android_pointer_speed = (int) v;
         return PE_SET_OK;
     }
 
@@ -243,6 +278,8 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
         {"reenter_ms", &cfg->reenter_ms, 0, 5000},
         {"anchor_extra", &cfg->anchor_extra, 0, 100},
         {"place_delay_ms", &cfg->place_delay_ms, 0, 50},
+        {"reanchor_entries", &cfg->reanchor_entries, 0, 1000},
+        {"reanchor_s", &cfg->reanchor_s, 0, 86400},
     };
     for (size_t i = 0; i < sizeof(ints) / sizeof(ints[0]); ++i) {
         if (!strcmp(key, ints[i].name)) {
@@ -281,6 +318,7 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
         {"pointer_scale", &cfg->pointer_scale, 0.25},
         {"sensitivity", &cfg->sensitivity, 0.05},
         {"wheel_scale", &cfg->wheel_scale, 0.05},
+        {"place_scale", &cfg->place_scale, 0.25},
     };
     for (size_t i = 0; i < sizeof(floats) / sizeof(floats[0]); ++i) {
         if (!strcmp(key, floats[i].name)) {

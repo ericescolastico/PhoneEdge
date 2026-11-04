@@ -105,20 +105,37 @@ ver o efeito dos cliques e da digitação.
 ### Etapa 5: calibrar o ponteiro
 
 O HID é relativo e o Android **não informa onde o ponteiro está**. O PhoneEdge estima a posição somando os
-movimentos que enviou, e ancora o ponteiro em um canto a cada entrada. O Android aplica velocidade e aceleração
-próprias ao mouse, então a estimativa **deriva**:
+movimentos que enviou. Além disso, o **Android acelera o mouse** (quanto mais rápido você mexe, mais o ponteiro anda
+por unidade), e isso causa os "pulos" e a sensação de sensibilidade irregular. Há dois remédios, e você pode usar os
+dois:
 
-| Sintoma | Causa provável | O que fazer |
-|---|---|---|
-| O cursor volta ao PC antes do ponteiro chegar à borda do celular | o ponteiro anda menos que o estimado | **diminua** `pointer_scale` (ex.: 0.8) |
-| O ponteiro bate na borda e é preciso empurrar muito para voltar | o ponteiro anda mais que o estimado | **aumente** `pointer_scale` (ex.: 1.3) |
-| O ponteiro aparece longe da altura esperada ao entrar | aceleração do Android na sequência de posicionamento | aumente `place_delay_ms` (ex.: 6) e/ou `anchor_extra` |
-| O ponteiro é lento/rápido demais | sensibilidade | ajuste `sensitivity` (>1 acelera) |
+1. **Desligar a aceleração e fixar a velocidade no Android, só enquanto o PhoneEdge roda** (é restaurado ao sair):
 
-Dicas: fixe a velocidade do ponteiro do Android: *Configurações → Gerenciamento geral → Configurações do teclado
-físico / Mouse e touchpad → Velocidade do ponteiro* (ou, com ADB: `adb shell settings put system pointer_speed 0`
-**[a validar]** que a One UI respeita). Teste com `-V debug` / `--debug-log`: cada saída mostra a posição estimada
-(`estimated pointer x,y`) para você comparar com o que viu na tela.
+   ```powershell
+   .\phoneedge.exe --stay-awake --android-accel-off=yes --android-pointer-speed=0 --place-scale=1 --debug-log log.txt
+   ```
+
+   **[a validar]** que a chave de aceleração existe na sua versão do Android (em versões antigas é ignorada sem
+   efeito). Se o programa fechar de forma anormal, restaure na mão:
+   `adb shell settings delete system mouse_pointer_acceleration_enabled` e
+   `adb shell settings put system pointer_speed 0`.
+
+2. **Calibrar `place_scale`**: é quantos pixels o ponteiro anda por unidade **nos movimentos rápidos** de
+   posicionamento ao entrar (com a aceleração ligada, o padrão é `3.0`; com ela desligada, use `1.0`). Teste: entre
+   pela borda **no meio da altura** do monitor; o ponteiro deve surgir **no meio da altura** do celular.
+
+| Sintoma | O que fazer |
+|---|---|
+| Ao entrar, o ponteiro surge **mais abaixo** (ou no canto de baixo) do que a altura em que você entrou | **diminua** `place_scale` (3 → 2 → 1.5 → 1) |
+| Ao entrar, surge **mais acima** | **aumente** `place_scale` |
+| O ponteiro "voa até o canto" a cada entrada | já é amenizado: ele só reancora a cada `reanchor_entries` entradas (padrão 6) ou 2 min; use `--reanchor-entries=0` para sempre ancorar, ou valores maiores para menos voos |
+| O cursor volta ao PC antes do ponteiro chegar à borda do celular | **diminua** `pointer_scale` (ex.: 0.8) |
+| É preciso empurrar muito para voltar | **aumente** `pointer_scale` (ex.: 1.3) |
+| Volta ao PC sem querer ao mexer perto da borda esquerda do celular | aumente `leave_margin` (padrão 100) |
+| Ponteiro rápido/lento demais | ajuste `sensitivity` (>1 acelera) ou `--android-pointer-speed` |
+
+Teste com `--debug-log`: cada saída mostra a posição estimada (`estimated pointer x,y`) para comparar com o que você
+viu na tela.
 
 ## 4. Opções
 
@@ -135,10 +152,14 @@ prioridade. Veja `phoneedge.ini` (comentado) e `.\phoneedge.exe --help`.
 | `sensitivity` | `1.0` | unidades enviadas por contagem do mouse |
 | `wheel_scale` | `1.0` | multiplicador da roda |
 | `hotkey` | `ctrl+alt+pause` | atalho de emergência (ctrl, alt, shift, win + uma tecla) |
+| `place_scale` | `3.0` | pixels por unidade nos movimentos rápidos de posicionamento (aceleração do Android) |
+| `reanchor_entries`, `reanchor_s` | `6`, `120` | reancora no canto a cada N entradas / após N segundos (0 = sempre) |
+| `altgr` | `yes` | Ctrl+Alt (que no Windows ABNT2 é o AltGr) vira o AltGr de verdade no celular: `?` = Ctrl+Alt+W |
+| `android_accel_off`, `android_pointer_speed` | `no`, `keep` | desligam a aceleração / fixam a velocidade do ponteiro no Android enquanto roda (restaura ao sair) |
 | `clip_cursor` | `no` | também prende o cursor em 1 pixel enquanto o celular tem o controle (plano B) |
 | `serial` | (único) | número de série do celular, se houver mais de um |
 | `stay_awake` | `no` | mantém o celular com a tela ligada |
-| `edge_push`, `leave_margin`, `entry_inset`, `return_inset`, `flush_ms`, `enter_guard_ms`, `reenter_ms`, `anchor_extra`, `place_delay_ms` | ver `phoneedge.ini` | ajustes finos |
+| `edge_push`, `leave_margin` (padrão 100), `entry_inset` (padrão 60), `entry_inset`, `return_inset`, `flush_ms`, `enter_guard_ms`, `reenter_ms`, `anchor_extra`, `place_delay_ms` | ver `phoneedge.ini` | ajustes finos |
 
 Outras: `--dry-run`, `--script=ARQ`, `--debug-log=ARQ`, `--config=ARQ`, `--list-monitors`, `--pause-on-exit`.
 

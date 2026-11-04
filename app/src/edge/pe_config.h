@@ -20,6 +20,8 @@ enum pe_side {
     PE_SIDE_BOTTOM,
 };
 
+#define PE_POINTER_SPEED_KEEP (-99)
+
 struct pe_config {
     // The edge of the PC monitor on which the phone is located
     enum pe_side edge;
@@ -61,6 +63,23 @@ struct pe_config {
     int anchor_extra;
     // Delay between the reports of the anchoring and positioning sequence
     int place_delay_ms;
+    // Pixels moved per unit by the *fast* anchoring/positioning reports.
+    // Android accelerates the mouse with its speed: at full speed the gain is
+    // constant and larger than for slow motion, so positioning needs its own
+    // factor (calibrate with calibra-posicionamento.txt)
+    float place_scale;
+    // Re-anchor the pointer to a corner only every N entries / after N
+    // seconds; in between, it is moved from where it was left (no visible
+    // flight to the corner). 0 = always anchor.
+    int reanchor_entries;
+    int reanchor_s;
+    // Translate Ctrl+Alt (AltGr on Windows layouts such as ABNT2) to the real
+    // right Alt (AltGr) on the phone
+    bool altgr;
+    // Android settings applied while running (restored on exit): mouse
+    // pointer acceleration off, and pointer speed (-7..7, -99 = keep)
+    bool android_accel_off;
+    int android_pointer_speed;
     // Also confine the PC cursor to a pixel while the phone has the control
     // (plan B if the hooks do not freeze the cursor on a given system)
     bool clip_cursor;

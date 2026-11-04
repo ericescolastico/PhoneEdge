@@ -49,6 +49,12 @@ static const char *const EDGE_SETTINGS[] = {
     "anchor-extra",
     "place-delay-ms",
     "clip-cursor",
+    "place-scale",
+    "reanchor-entries",
+    "reanchor-s",
+    "altgr",
+    "android-accel-off",
+    "android-pointer-speed",
 };
 #define EDGE_SETTINGS_COUNT (sizeof(EDGE_SETTINGS) / sizeof(EDGE_SETTINGS[0]))
 
@@ -89,6 +95,12 @@ static const struct option long_options[] = {
     EDGE_OPT("anchor-extra", 15),
     EDGE_OPT("place-delay-ms", 16),
     EDGE_OPT("clip-cursor", 17),
+    EDGE_OPT("place-scale", 18),
+    EDGE_OPT("reanchor-entries", 19),
+    EDGE_OPT("reanchor-s", 20),
+    EDGE_OPT("altgr", 21),
+    EDGE_OPT("android-accel-off", 22),
+    EDGE_OPT("android-pointer-speed", 23),
     {NULL,                 0,                 NULL, 0},
 };
 
@@ -138,6 +150,14 @@ scrcpy_print_usage(const char *arg0) {
 "        --hotkey=ctrl+alt+pause        Atalho de emergência.\n"
 "        --edge-push, --leave-margin, --entry-inset, --return-inset, --flush-ms,\n"
 "        --enter-guard-ms, --reenter-ms, --anchor-extra, --place-delay-ms,\n"
+"        --place-scale=X                Pixels por unidade no posicionamento rápido\n"
+"                                       (aceleração do Android; padrão 3.0).\n"
+"        --reanchor-entries=N           Reancora no canto a cada N entradas (0 = sempre).\n"
+"        --altgr=yes|no                 Ctrl+Alt vira AltGr no celular (padrão yes).\n"
+"        --android-accel-off=yes|no     Desliga a aceleração do mouse no Android\n"
+"                                       enquanto roda (restaura ao sair).\n"
+"        --android-pointer-speed=-7..7|keep  Velocidade do ponteiro no Android\n"
+"                                       enquanto roda (restaura ao sair).\n"
 "        --clip-cursor=yes|no           Ajustes finos (veja o phoneedge.ini).\n",
     arg0);
 }
