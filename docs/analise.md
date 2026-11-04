@@ -158,3 +158,31 @@ Não consegui confirmar o comportamento sem Windows. Se acontecer: não engolir 
 ## 8. O que **não** foi testado nesta fase
 
 Tudo que envolve Windows ou o S22: Raw Input com hook, `WH_*_LL`, `UHID` no Android, `wm size`, deriva do ponteiro, One UI. Nesta fase só foi verificado: o build Linux, os testes existentes (12/12), o fluxo de código descrito acima, e a existência/acessibilidade dos artefatos do release v5.0.1 no GitHub.
+
+
+---
+
+## 9. Atualização: o que foi implementado e o que já foi verificado (Fases 1 a 5)
+
+**Decisões do §1:** todas mantidas. Ajustes feitos na implementação:
+
+- Só controle (`video=false audio=false`); o cliente envia ao servidor a versão **5.0.1** (`SCRCPY_SERVER_VERSION`), separada da versão do PhoneEdge.
+- Teclado UHID estendido até o usage 0x8B (teclas `/ ?` e `.` do numérico do ABNT2, que o descriptor original descartava).
+- Tamanho da tela com rotação: `dumpsys input` (viewport) → `wm size` + `SurfaceOrientation` → configuração. **[a validar no S22]**: formato real da saída.
+- Posição estimada: `pointer_scale` (px por unidade HID, mínimo 0.25), âncora no canto mais próximo, retorno exige "empurrar" além da borda (`leave_margin`) depois de `enter_guard_ms`.
+- Captura Windows em thread própria (Raw Input para deltas + `WH_MOUSE_LL`/`WH_KEYBOARD_LL`), com a sessão, o remetente assíncrono (hooks nunca esperam rede/console) e o injetor UHID.
+- Extras para diagnóstico: `--dry-run` (sem celular), `--script` (celular sem ganchos), `--debug-log`, `--list-monitors`, `.ini`.
+
+**Verificações feitas sem Windows real nem celular:**
+
+| O quê | Como |
+|---|---|
+| Lógica de borda, posição, atalho, teclas presas | testes unitários + teste com sequências aleatórias (invariantes), ASan/UBSan, TSan |
+| Cadeia completa até o UHID | integração com `adb` e servidor falsos (`tests/e2e/`): entrada, clique, roda, tecla, atalho, desconexão |
+| Camada Win32 (hooks, Raw Input, `SetCursorPos`, atalho) | executável Windows rodando no **Wine** + Xvfb + `xdotool` (`tests/wine/`): entrou, andou, voltou pela borda, atalho devolveu o controle |
+| Build e testes no Windows | GitHub Actions `windows-latest` (MSYS2): build, 18 testes e zip |
+| Duas revisões adversariais independentes (11 + 13 achados confirmados e corrigidos) | núcleo e camada Windows |
+
+**R1 (Raw Input continua chegando com o mouse engolido pelo hook)**: confirmado **no Wine**; no Windows real continua **[a validar]** (plano B: `clip_cursor`).
+
+**Ainda depende do seu teste (Windows + S22):** R1 no Windows real; ponteiro/UHID aparecendo no One UI; velocidade e deriva (`pointer_scale`); layout ABNT2; formato do `dumpsys input` do S22; comportamento do Windows ao puxar o cabo/encerrar no meio do controle; Auto Blocker/driver USB.
