@@ -9,11 +9,11 @@
 static struct scrcpy_cli_args
 default_args(void) {
     struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
         .help = false,
         .version = false,
         .pause_on_exit = false,
     };
+    scrcpy_options_init(&args.opts);
     return args;
 }
 

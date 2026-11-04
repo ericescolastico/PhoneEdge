@@ -32,6 +32,7 @@ pe_config_defaults(struct pe_config *cfg) {
     cfg->reenter_ms = 300;
     cfg->anchor_extra = 3;
     cfg->place_delay_ms = 2;
+    cfg->clip_cursor = false;
 }
 
 const char *
@@ -128,6 +129,37 @@ parse_phone_size(struct pe_config *cfg, const char *value) {
     return true;
 }
 
+static int
+strcasecmp_ascii(const char *a, const char *b) {
+    for (;; ++a, ++b) {
+        int ca = tolower((unsigned char) *a);
+        int cb = tolower((unsigned char) *b);
+        if (ca != cb) {
+            return ca - cb;
+        }
+        if (!ca) {
+            return 0;
+        }
+    }
+}
+
+bool
+pe_parse_bool(const char *s, bool *out) {
+    static const char *const yes[] = {"yes", "true", "on", "1"};
+    static const char *const no[] = {"no", "false", "off", "0"};
+    for (size_t i = 0; i < sizeof(yes) / sizeof(yes[0]); ++i) {
+        if (!strcasecmp_ascii(s, yes[i])) {
+            *out = true;
+            return true;
+        }
+        if (!strcasecmp_ascii(s, no[i])) {
+            *out = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 normalize_key(const char *in, char *out, size_t len) {
     size_t i = 0;
@@ -174,6 +206,15 @@ pe_config_set(struct pe_config *cfg, const char *key_in, const char *value,
             return PE_SET_INVALID_VALUE;
         }
         cfg->hotkey = hk;
+        return PE_SET_OK;
+    }
+
+    if (!strcmp(key, "clip_cursor")) {
+        if (!pe_parse_bool(value, &cfg->clip_cursor)) {
+            set_err(err, errlen, "%s: expected yes or no, got \"%s\"", key,
+                    value);
+            return PE_SET_INVALID_VALUE;
+        }
         return PE_SET_OK;
     }
 

@@ -16,6 +16,9 @@
 #define LOGW(...) SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, __VA_ARGS__)
 #define LOGE(...) SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, __VA_ARGS__)
 
+// For the hot paths (input hooks): skip even the arguments evaluation
+#define LOG_VERBOSE_ENABLED() (sc_get_log_level() <= SC_LOG_LEVEL_VERBOSE)
+
 #define LOG_OOM() \
     LOGE("OOM: %s:%d %s()", __FILE__, __LINE__, __func__)
 
@@ -37,5 +40,13 @@ sc_log_windows_error(const char *prefix, int error);
 
 void
 sc_log_configure(void);
+
+// Also write the logs, with timestamps, to a file (appended). Return false if
+// it cannot be opened.
+bool
+sc_log_set_file(const char *path);
+
+void
+sc_log_close_file(void);
 
 #endif

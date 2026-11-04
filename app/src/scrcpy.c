@@ -1,27 +1,35 @@
 #include "scrcpy.h"
 
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <SDL3/SDL.h>
 
 #ifdef _WIN32
+# include <winsock2.h>
 # include <windows.h>
 #endif
 
 #include "controller.h"
 #include "events.h"
+#include "pe/pe_app.h"
+#include "pe/pe_dryrun.h"
 #include "server.h"
 #include "uhid/keyboard_uhid.h"
 #include "uhid/mouse_uhid.h"
 #include "util/log.h"
 #include "util/rand.h"
+#include "util/tick.h"
 
 struct scrcpy {
     struct sc_server server;
     struct sc_controller controller;
     struct sc_keyboard_uhid keyboard_uhid;
     struct sc_mouse_uhid mouse_uhid;
+    struct pe_app pe;
+    struct pe_dryrun dryrun;
+    atomic_bool pe_running;
 };
 
 #ifdef _WIN32
@@ -94,7 +102,13 @@ sc_controller_on_ended(struct sc_controller *controller, bool error,
     // Note: this function may be called twice, once from the controller thread
     // and once from the receiver thread
     (void) controller;
-    (void) userdata;
+    struct scrcpy *s = userdata;
+
+    // The phone is gone: give the PC its mouse and keyboard back right now,
+    // without waiting for the main loop
+    if (atomic_load(&s->pe_running)) {
+        pe_app_notify_disconnect(&s->pe);
+    }
 
     if (error) {
         sc_push_event(SC_EVENT_CONTROLLER_ERROR);
@@ -137,6 +151,33 @@ scrcpy_generate_scid(void) {
     return sc_rand_u32(&rand) & 0x7FFFFFFF;
 }
 
+// --dry-run: no phone, nothing sent; only the PC side is exercised
+static enum scrcpy_exit_code
+run_dry(struct scrcpy_options *options, struct scrcpy *s) {
+    pe_dryrun_init(&s->dryrun);
+
+#ifdef _WIN32
+    sdl_configure_ctrl_c_windows();
+#endif
+
+    struct pe_app_params pe_params = {
+        .cfg = &options->edge,
+        .script_path = options->script_path,
+        .mp = &s->dryrun.mp,
+        .kp = &s->dryrun.kp,
+        .intr = NULL, // no adb: the phone size comes from the configuration
+        .serial = NULL,
+    };
+    if (!pe_app_start(&s->pe, &pe_params)) {
+        return SCRCPY_EXIT_FAILURE;
+    }
+    LOGI("Modo de teste (--dry-run): nenhum celular é usado. Ctrl+C para sair.");
+
+    enum scrcpy_exit_code ret = event_loop();
+    pe_app_stop(&s->pe, true);
+    return ret;
+}
+
 enum scrcpy_exit_code
 scrcpy(struct scrcpy_options *options) {
     static struct scrcpy scrcpy;
@@ -159,6 +200,12 @@ scrcpy(struct scrcpy_options *options) {
     bool server_started = false;
     bool controller_initialized = false;
     bool controller_started = false;
+    bool pe_started = false;
+    atomic_init(&scrcpy.pe_running, false);
+
+    if (options->dry_run) {
+        return run_dry(options, s);
+    }
 
     struct sc_server_params params = {
         .scid = scrcpy_generate_scid(),
@@ -206,7 +253,7 @@ scrcpy(struct scrcpy_options *options) {
     };
 
     if (!sc_controller_init(&s->controller, s->server.control_socket,
-                            &controller_cbs, NULL)) {
+                            &controller_cbs, s)) {
         goto end;
     }
     controller_initialized = true;
@@ -225,9 +272,35 @@ scrcpy(struct scrcpy_options *options) {
 
     LOGI("Connected to \"%s\"", s->server.info.device_name);
 
+    struct pe_app_params pe_params = {
+        .cfg = &options->edge,
+        .script_path = options->script_path,
+        .mp = &s->mouse_uhid.mouse_processor,
+        .kp = &s->keyboard_uhid.key_processor,
+        .intr = &s->server.intr,
+        .serial = s->server.serial,
+    };
+    if (!pe_app_start(&s->pe, &pe_params)) {
+        goto end;
+    }
+    pe_started = true;
+    atomic_store(&s->pe_running, true);
+
     ret = event_loop();
 
 end:
+    if (pe_started) {
+        // Give the control back to the PC before anything else. If the phone is
+        // still there, release what is held on it and let the messages go out
+        // before closing the controller.
+        bool phone_alive = ret == SCRCPY_EXIT_SUCCESS;
+        atomic_store(&s->pe_running, false);
+        pe_app_stop(&s->pe, phone_alive);
+        if (phone_alive && controller_started) {
+            sc_controller_wait_idle(&s->controller, SC_TICK_FROM_MS(1000));
+        }
+    }
+
     if (controller_started) {
         sc_controller_stop(&s->controller);
     }

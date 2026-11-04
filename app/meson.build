@@ -15,6 +15,13 @@ src = [
     'src/edge/pe_vpos.c',
     'src/events.c',
     'src/options.c',
+    'src/pe/pe_app.c',
+    'src/pe/pe_dryrun.c',
+    'src/pe/pe_inject.c',
+    'src/pe/pe_script.c',
+    'src/pe/pe_sender.c',
+    'src/pe/pe_session.c',
+    'src/pe/pe_monitors.c',
     'src/receiver.c',
     'src/scrcpy.c',
     'src/server.c',
@@ -50,6 +57,7 @@ if host_machine.system() == 'windows'
     windows = import('windows')
     src += [
         'src/util/command.c',
+        'src/win/win_driver.c',
         'src/sys/win/file.c',
         'src/sys/win/process.c',
         windows.compile_resources('phoneedge-windows.rc'),
@@ -84,6 +92,7 @@ dependencies = [
 if host_machine.system() == 'windows'
     dependencies += cc.find_library('mingw32')
     dependencies += cc.find_library('ws2_32')
+    dependencies += cc.find_library('winmm')
 endif
 
 check_functions = [
@@ -154,6 +163,8 @@ if get_option('buildtype') == 'debug'
         ['test_cli', [
             'tests/test_cli.c',
             'src/cli.c',
+            'src/edge/pe_config.c',
+            'src/edge/pe_keymap.c',
             'src/options.c',
             'src/util/log.c',
             'src/util/net.c',

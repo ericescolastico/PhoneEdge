@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""End-to-end tests of the whole client chain on Linux (no phone, no Windows):
+
+    phoneedge --script ...  ->  edge state machine  ->  sender  ->  UHID
+        ->  controller  ->  socket  ->  fake server (tests/e2e/fake_adb.py)
+
+Usage: run_e2e.py PATH_TO_PHONEEDGE [LD_LIBRARY_PATH]
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FAKE_ADB = os.path.join(HERE, "fake_adb.py")
+
+KEYBOARD_ID = 1
+MOUSE_ID = 2
+
+
+def run(exe, script, env_extra=None, args=(), timeout=30):
+    with tempfile.TemporaryDirectory() as tmp:
+        script_path = os.path.join(tmp, "script.txt")
+        with open(script_path, "w") as f:
+            f.write(textwrap.dedent(script))
+        server = os.path.join(tmp, "scrcpy-server")
+        with open(server, "wb") as f:
+            f.write(b"fake")
+        env = dict(os.environ)
+        env.update({
+            "ADB": FAKE_ADB,
+            "SCRCPY_SERVER_PATH": server,
+            "FAKE_ADB_DIR": os.path.join(tmp, "state"),
+        })
+        env.update(env_extra or {})
+        proc = subprocess.run(
+            [exe, "-V", "debug", "--script", script_path, *args],
+            env=env, capture_output=True, text=True, timeout=timeout)
+        log = []
+        logfile = os.path.join(tmp, "state", "server.jsonl")
+        if os.path.exists(logfile):
+            with open(logfile) as f:
+                log = [json.loads(l) for l in f if l.strip()]
+        return proc, log
+
+
+def inputs(log, dev_id):
+    return [bytes.fromhex(e["data"]) for e in log
+            if e["event"] == "uhid_input" and e["id"] == dev_id]
+
+
+def mouse_reports(log):
+    """(buttons, dx, dy, wheel, pan) of each mouse report"""
+    out = []
+    for d in inputs(log, MOUSE_ID):
+        s = lambda b: b - 256 if b > 127 else b
+        out.append((d[0], s(d[1]), s(d[2]), s(d[3]), s(d[4])))
+    return out
+
+
+def check(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
+
+
+def test_devices_created(exe):
+    proc, log = run(exe, "sleep 100\nquit\n")
+    check(proc.returncode == 0, f"exit code {proc.returncode}\n{proc.stdout}\n{proc.stderr}")
+    creates = [e for e in log if e["event"] == "uhid_create"]
+    check({e["id"] for e in creates} == {KEYBOARD_ID, MOUSE_ID}, f"creates: {creates}")
+    check(any("Connected to \"FakePhone\"" in l for l in proc.stdout.splitlines() + proc.stderr.splitlines()), proc.stdout)
+    # the server was launched with the control-only parameters and the
+    # version of the prebuilt server, not the one of PhoneEdge
+    args = [e for e in log if e["event"] == "server_args"][0]["args"]
+    check("5.0.1" in args, args)
+    check("video=false" in args and "audio=false" in args, args)
+
+
+def test_enter_move_click_leave(exe):
+    script = """
+        monitor 0 0 1920 1080
+        # push against the right edge at the middle of the screen
+        move 8 0 1919 540
+        sleep 20
+        move 8 0 1919 540
+        sleep 600
+        state
+        # move the phone pointer down and click
+        move 0 30 0 0
+        sleep 20
+        down left
+        sleep 20
+        up left
+        sleep 20
+        wheel -120
+        sleep 20
+        key down 0x04
+        sleep 20
+        key up 0x04
+        sleep 20
+        # come back through the left edge of the phone
+        move -200 0 0 0
+        sleep 20
+        move -200 0 0 0
+        sleep 20
+        move -200 0 0 0
+        sleep 20
+        move -200 0 0 0
+        sleep 50
+        state
+        quit
+    """
+    proc, log = run(exe, script)
+    out = proc.stdout + proc.stderr
+    check(proc.returncode == 0, f"exit code {proc.returncode}\n{out}")
+    check("Control moved to the phone" in out, out)
+    check("script: phone_active=1" in out, out)
+    check("Control back to the PC: edge" in out, out)
+    check(out.rindex("phone_active=0") > out.rindex("Control back"), out)
+
+    reports = mouse_reports(log)
+    check(len(reports) > 10, f"{len(reports)} mouse reports")
+    # anchoring: the first reports go toward a corner at full scale
+    check(reports[0][1:3] in ((-127, -127), (-127, 127)), reports[:3])
+    # a left click: a report with only the left button, then without
+    check(any(r[0] == 1 for r in reports), "no left button report")
+    check(reports[-1][0] == 0 or any(r[0] == 0 for r in reports[-3:]), "button not released")
+    # a wheel notch down
+    check(any(r[3] == -1 for r in reports), "no wheel report")
+    # the 'a' key: usage 0x04 pressed then released
+    kb = inputs(log, KEYBOARD_ID)
+    check(any(d[2] == 0x04 for d in kb), f"no 'a' in {[d.hex() for d in kb]}")
+    check(kb[-1][2:] == b"\0" * 6, f"key not released {kb[-1].hex()}")
+
+
+def test_hotkey_releases_everything(exe):
+    script = """
+        move 8 0 1919 300
+        sleep 20
+        move 8 0 1919 300
+        sleep 600
+        down left
+        sleep 20
+        key down 0xe0
+        sleep 20
+        key down 0xe2
+        sleep 20
+        key down 0x04
+        sleep 20
+        key down 0x48
+        sleep 100
+        state
+        key up 0x48
+        quit
+    """
+    proc, log = run(exe, script)
+    out = proc.stdout + proc.stderr
+    check(proc.returncode == 0, f"exit code {proc.returncode}\n{out}")
+    check("Control back to the PC: emergency hotkey" in out, out)
+    check(out.rindex("phone_active=0") > 0 and "phone_active=1" not in out.split("emergency hotkey")[1], out)
+    # nothing is left pressed on the phone
+    mouse = mouse_reports(log)
+    check(mouse[-1][0] == 0, f"mouse button left pressed: {mouse[-3:]}")
+    kb = inputs(log, KEYBOARD_ID)
+    check(kb[-1][0] == 0 and kb[-1][2:] == b"\0" * 6, f"keyboard not released: {kb[-1].hex()}")
+
+
+def test_disconnect_returns_mouse(exe):
+    script = """
+        move 8 0 1919 300
+        sleep 20
+        move 8 0 1919 300
+        sleep 3000
+        quit
+    """
+    proc, log = run(exe, script, env_extra={"FAKE_ADB_DIE_MS": "800"})
+    out = proc.stdout + proc.stderr
+    check(proc.returncode == 2, f"exit code {proc.returncode} (expected 2: disconnected)\n{out}")
+    check("Device disconnected" in out, out)
+    check("Control back to the PC: phone disconnected" in out, out)
+
+
+def test_viewport_rotation_and_fallbacks(exe):
+    proc, _ = run(exe, "sleep 50\nquit\n", env_extra={"FAKE_ADB_VIEWPORT": "2340x1080:1"})
+    check("Phone screen: 2340x1080 (display viewport, rotation 1)" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
+    proc, _ = run(exe, "sleep 50\nquit\n", env_extra={"FAKE_ADB_NO_DUMPSYS": "1"})
+    check("Phone screen: 1080x2340 (wm size" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
+    proc, _ = run(exe, "sleep 50\nquit\n", args=("--phone-size", "720x1560"))
+    check("Phone screen: 720x1560 (from the configuration)" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
+
+
+def test_bad_script_line(exe):
+    proc, log = run(exe, "bogus command\nquit\n")
+    check("invalid command" in proc.stdout + proc.stderr, proc.stdout + proc.stderr)
+
+
+TESTS = [
+    test_devices_created,
+    test_enter_move_click_leave,
+    test_hotkey_releases_everything,
+    test_disconnect_returns_mouse,
+    test_viewport_rotation_and_fallbacks,
+]
+
+
+def main():
+    exe = sys.argv[1]
+    if len(sys.argv) > 2:
+        os.environ["LD_LIBRARY_PATH"] = sys.argv[2]
+    failed = 0
+    for t in TESTS:
+        try:
+            t(exe)
+            print(f"PASS {t.__name__}")
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"FAIL {t.__name__}: {e}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

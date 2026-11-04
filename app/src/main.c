@@ -8,12 +8,15 @@
 #include "events.h"
 #include "options.h"
 #include "scrcpy.h"
+#include "util/file.h"
 #include "util/log.h"
 #include "util/net.h"
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #include "util/str.h"
+#include "win/win_driver.h"
 #endif
 
 static int
@@ -29,11 +32,17 @@ main_scrcpy(int argc, char *argv[]) {
            " (fork do scrcpy, veja NOTICE)\n");
 
     struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
         .help = false,
         .version = false,
         .pause_on_exit = false,
     };
+    scrcpy_options_init(&args.opts);
+
+    // phoneedge.ini next to the executable is read automatically
+    char *default_config = sc_file_get_local_path("phoneedge.ini");
+    if (default_config && sc_file_is_regular(default_config)) {
+        args.opts.config_path = default_config;
+    }
 
 #ifndef NDEBUG
     args.opts.log_level = SC_LOG_LEVEL_DEBUG;
@@ -48,6 +57,15 @@ main_scrcpy(int argc, char *argv[]) {
 
     sc_set_log_level(args.opts.log_level);
 
+    if (args.opts.debug_log) {
+        if (!sc_log_set_file(args.opts.debug_log)) {
+            LOGE("Não foi possível abrir o arquivo de log %s",
+                 args.opts.debug_log);
+        } else {
+            LOGI("Log detalhado em %s", args.opts.debug_log);
+        }
+    }
+
     if (args.help) {
         scrcpy_print_usage(argv[0]);
         ret = SCRCPY_EXIT_SUCCESS;
@@ -56,6 +74,16 @@ main_scrcpy(int argc, char *argv[]) {
 
     if (args.version) {
         printf("PhoneEdge " SCRCPY_VERSION "\n");
+        ret = SCRCPY_EXIT_SUCCESS;
+        goto end;
+    }
+
+    if (args.opts.list_monitors) {
+#ifdef _WIN32
+        pe_win_print_monitors();
+#else
+        printf("--list-monitors só funciona no Windows.\n");
+#endif
         ret = SCRCPY_EXIT_SUCCESS;
         goto end;
     }
@@ -72,6 +100,8 @@ main_scrcpy(int argc, char *argv[]) {
     net_cleanup();
 
 end:
+    free(default_config);
+    sc_log_close_file();
     if (args.pause_on_exit) {
         printf("Press Enter to continue...\n");
         getchar();

@@ -61,6 +61,9 @@ struct pe_config {
     int anchor_extra;
     // Delay between the reports of the anchoring and positioning sequence
     int place_delay_ms;
+    // Also confine the PC cursor to a pixel while the phone has the control
+    // (plan B if the hooks do not freeze the cursor on a given system)
+    bool clip_cursor;
 };
 
 void
@@ -96,6 +99,10 @@ typedef bool (*pe_ini_cb)(void *userdata, const char *key, const char *value,
 bool
 pe_ini_parse(const char *text, pe_ini_cb cb, void *userdata, char *err,
              unsigned errlen);
+
+// Parse yes/no, true/false, on/off, 1/0 (case insensitive)
+bool
+pe_parse_bool(const char *s, bool *out);
 
 // Size of the phone after applying the rotation
 void

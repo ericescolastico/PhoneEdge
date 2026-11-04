@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <SDL3/SDL_timer.h>
 
 static SDL_LogPriority
 log_level_sc_to_sdl(enum sc_log_level level) {
@@ -99,6 +100,8 @@ static const char *const sc_sdl_log_priority_names[SDL_LOG_PRIORITY_COUNT] = {
     [SDL_LOG_PRIORITY_CRITICAL] = "CRITICAL",
 };
 
+static FILE *log_file;
+
 static void SDLCALL
 sc_sdl_log_print(void *userdata, int category, SDL_LogPriority priority,
                  const char *message) {
@@ -109,6 +112,35 @@ sc_sdl_log_print(void *userdata, int category, SDL_LogPriority priority,
     assert(priority < SDL_LOG_PRIORITY_COUNT);
     const char *prio_name = sc_sdl_log_priority_names[priority];
     fprintf(out, "%s: %s\n", prio_name, message);
+
+    if (log_file) {
+        // Timestamp: milliseconds since the start, to correlate events
+        fprintf(log_file, "[%8llu ms] %s: %s\n",
+                (unsigned long long) SDL_GetTicks(), prio_name, message);
+        // Flush every line: the log must survive a crash or a kill
+        fflush(log_file);
+    }
+}
+
+bool
+sc_log_set_file(const char *path) {
+    FILE *f = fopen(path, "a");
+    if (!f) {
+        return false;
+    }
+    if (log_file) {
+        fclose(log_file);
+    }
+    log_file = f;
+    return true;
+}
+
+void
+sc_log_close_file(void) {
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
+    }
 }
 
 void

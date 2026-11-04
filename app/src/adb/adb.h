@@ -126,4 +126,16 @@ sc_adb_get_device_ip(struct sc_intr *intr, const char *serial, unsigned flags);
 uint16_t
 sc_adb_get_device_sdk_version(struct sc_intr *intr, const char *serial);
 
+/**
+ * Run `adb -s SERIAL shell ARGS...` and return its standard output as a
+ * NUL-terminated string (to free with free()), or NULL on error.
+ *
+ * `args` is a NULL-terminated list (at most 6 elements). At most `max_len`
+ * bytes of output are kept: the rest is discarded and the command is not
+ * reported as failed.
+ */
+char *
+sc_adb_shell_output(struct sc_intr *intr, const char *serial,
+                    const char *const args[], size_t max_len, unsigned flags);
+
 #endif
