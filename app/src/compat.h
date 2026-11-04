@@ -3,10 +3,13 @@
 
 #include "config.h"
 
-#include <libavcodec/version.h>
-#include <libavformat/version.h>
-#include <libavutil/version.h>
-#include <SDL3/SDL_version.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
 
 #ifndef _WIN32
 # define PRIu64_ PRIu64
@@ -14,15 +17,6 @@
 #else
 # define PRIu64_ "I64u"  // Windows...
 # define SC_PRIsizet "Iu"
-#endif
-
-// In ffmpeg/doc/APIchanges:
-// 2023-10-06 - 5432d2aacad - lavc 60.15.100 - avformat.h
-//   Deprecate AVFormatContext.{nb_,}side_data, av_stream_add_side_data(),
-//   av_stream_new_side_data(), and av_stream_get_side_data(). Side data fields
-//   from AVFormatContext.codecpar should be used from now on.
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(60, 15, 100)
-# define SCRCPY_LAVC_HAS_CODECPAR_CODEC_SIDEDATA
 #endif
 
 #ifndef HAVE_STRDUP
