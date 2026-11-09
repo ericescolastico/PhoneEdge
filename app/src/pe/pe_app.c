@@ -1,5 +1,6 @@
 #include "pe_app.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -110,6 +111,77 @@ set_pc_cursor(void *ud, int x, int y) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Android pointer settings (applied while running, restored on exit)
+
+static void
+trim_nl(char *s) {
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ')) {
+        s[--n] = '\0';
+    }
+}
+
+static void
+android_set(struct pe_app *app, unsigned slot, const char *key,
+            const char *value) {
+    if (!app->adb_intr || !app->adb_serial) {
+        return;
+    }
+    const char *const get[] = {"settings", "get", "system", key, NULL};
+    char *old = sc_adb_shell_output(app->adb_intr, app->adb_serial, get, 256,
+                                    SC_ADB_SILENT);
+    if (old) {
+        trim_nl(old);
+        if (!strcmp(old, "null") || !*old) {
+            free(old);
+            old = NULL; // did not exist
+        }
+    }
+    const char *const put[] = {"settings", "put", "system", key, value, NULL};
+    char *out = sc_adb_shell_output(app->adb_intr, app->adb_serial, put, 256,
+                                    SC_ADB_SILENT);
+    if (!out) {
+        LOGW("Could not set the Android setting %s", key);
+        free(old);
+        return;
+    }
+    free(out);
+    app->android_settings[slot].key = key;
+    app->android_settings[slot].original = old;
+    app->android_settings[slot].changed = true;
+    LOGI("Android: %s = %s (was %s); restored on exit", key, value,
+         old ? old : "unset");
+}
+
+static void
+android_restore(struct pe_app *app) {
+    for (unsigned i = 0; i < 2; ++i) {
+        if (!app->android_settings[i].changed) {
+            continue;
+        }
+        const char *key = app->android_settings[i].key;
+        char *orig = app->android_settings[i].original;
+        const char *const put[] =
+            {"settings", "put", "system", key, orig, NULL};
+        const char *const del[] = {"settings", "delete", "system", key, NULL};
+        char *out = sc_adb_shell_output(app->adb_intr, app->adb_serial,
+                                        orig ? put : del, 256, SC_ADB_SILENT);
+        if (out) {
+            LOGI("Android: %s restored", key);
+        } else {
+            LOGW("Could not restore the Android setting %s (to restore it: "
+                 "adb shell settings %s system %s%s%s)", key,
+                 orig ? "put" : "delete", key, orig ? " " : "",
+                 orig ? orig : "");
+        }
+        free(out);
+        free(orig);
+        app->android_settings[i].changed = false;
+        app->android_settings[i].original = NULL;
+    }
+}
+
 bool
 pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
     memset(app, 0, sizeof(*app));
@@ -144,6 +216,20 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
     // The log lines of the session are written by the sender thread
     pe_session_set_logger(&app->session, pe_sender_log, &app->sender);
 
+    if (params->intr && params->serial) {
+        app->adb_intr = params->intr;
+        app->adb_serial = strdup(params->serial);
+        if (app->cfg.android_accel_off) {
+            // (the key exists on recent Android versions; harmless otherwise)
+            android_set(app, 0, "mouse_pointer_acceleration_enabled", "0");
+        }
+        if (app->cfg.android_pointer_speed != PE_POINTER_SPEED_KEEP) {
+            char speed[8];
+            snprintf(speed, sizeof(speed), "%d", app->cfg.android_pointer_speed);
+            android_set(app, 1, "pointer_speed", speed);
+        }
+    }
+
     int w, h;
     probe_phone_size(params, &w, &h);
     pe_session_set_phone_size(&app->session, w, h);
@@ -161,13 +247,18 @@ pe_app_start(struct pe_app *app, const struct pe_app_params *params) {
          "sensitivity=%.2f wheel_scale=%.2f hotkey=%s edge_push=%d "
          "leave_margin=%d entry_inset=%d return_inset=%d flush_ms=%d "
          "enter_guard_ms=%d reenter_ms=%d anchor_extra=%d place_delay_ms=%d "
-         "clip_cursor=%s",
+         "clip_cursor=%s place_scale=%.2f reanchor=%d/%ds altgr=%s "
+         "android_accel_off=%s android_pointer_speed=%d",
          pe_side_name(app->cfg.edge), app->cfg.monitor_index, w, h,
          app->cfg.pointer_scale, app->cfg.sensitivity, app->cfg.wheel_scale,
          hotkey, app->cfg.edge_push, app->cfg.leave_margin,
          app->cfg.entry_inset, app->cfg.return_inset, app->cfg.flush_ms,
          app->cfg.enter_guard_ms, app->cfg.reenter_ms, app->cfg.anchor_extra,
-         app->cfg.place_delay_ms, app->cfg.clip_cursor ? "yes" : "no");
+         app->cfg.place_delay_ms, app->cfg.clip_cursor ? "yes" : "no",
+         app->cfg.place_scale, app->cfg.reanchor_entries,
+         app->cfg.reanchor_s, app->cfg.altgr ? "yes" : "no",
+         app->cfg.android_accel_off ? "yes" : "no",
+         app->cfg.android_pointer_speed);
 
     if (params->script_path) {
         if (!pe_script_init(&app->script, &app->session,
@@ -258,10 +349,20 @@ pe_app_stop(struct pe_app *app, bool phone_alive) {
         pe_sender_join(&app->sender);
         app->sender_started = false;
     }
+
+    if (phone_alive) {
+        android_restore(app);
+    }
 }
 
 void
 pe_app_destroy(struct pe_app *app) {
+    for (unsigned i = 0; i < 2; ++i) {
+        free(app->android_settings[i].original);
+        app->android_settings[i].original = NULL;
+    }
+    free(app->adb_serial);
+    app->adb_serial = NULL;
     if (app->script_initialized) {
         pe_script_destroy(&app->script);
         app->script_initialized = false;

@@ -44,6 +44,7 @@ clampf(float v, float lo, float hi) {
 }
 
 #define MIN_INT(a, b) ((a) < (b) ? (a) : (b))
+#define MIN_F(a, b) ((a) < (b) ? (a) : (b))
 #define MAX_INT(a, b) ((a) > (b) ? (a) : (b))
 
 static int
@@ -79,6 +80,7 @@ pe_edge_set_monitors(struct pe_edge *e, const struct pe_rect *rects, int count,
 void
 pe_edge_set_phone_size(struct pe_edge *e, int width, int height) {
     pe_vpos_init(&e->vpos, width, height);
+    e->anchored = false;
 }
 
 enum pe_state
@@ -180,7 +182,8 @@ phone_mods(const struct pe_edge *e) {
 // against the phone edge facing the PC.
 static void
 emit_motion(struct pe_edge *e, struct pe_result *res, int dx, int dy,
-            bool placement, uint16_t delay_ms, bool watch_leave) {
+            bool placement, uint16_t delay_ms, bool watch_leave,
+            float scale) {
     int ax = dx < 0 ? -dx : dx;
     int ay = dy < 0 ? -dy : dy;
     int n = MAX_INT((ax + PE_HID_MAX - 1) / PE_HID_MAX,
@@ -203,8 +206,7 @@ emit_motion(struct pe_edge *e, struct pe_result *res, int dx, int dy,
         a->move.delay_ms = delay_ms;
 
         float cutx, cuty;
-        pe_vpos_move(&e->vpos, cx * e->cfg.pointer_scale,
-                     cy * e->cfg.pointer_scale, &cutx, &cuty);
+        pe_vpos_move(&e->vpos, cx * scale, cy * scale, &cutx, &cuty);
 
         if (!watch_leave) {
             continue;
@@ -244,7 +246,7 @@ flush_pending(struct pe_edge *e, uint64_t now, struct pe_result *res,
     e->pending_dx = 0;
     e->pending_dy = 0;
     e->last_flush = now;
-    emit_motion(e, res, dx, dy, false, 0, watch_leave);
+    emit_motion(e, res, dx, dy, false, 0, watch_leave, e->cfg.pointer_scale);
 }
 
 static void
@@ -346,6 +348,8 @@ leave_phone(struct pe_edge *e, uint64_t now, enum pe_leave_reason reason,
         }
     }
 
+    memset(e->altgr_hidden, 0, sizeof(e->altgr_hidden));
+    e->altgr_active = false;
     e->state = PE_STATE_PC_ACTIVE;
     e->leave_time = now;
     e->has_left = true;
@@ -369,6 +373,8 @@ enter_phone(struct pe_edge *e, uint64_t now, float ratio,
     e->last_flush = now;
     e->phone_buttons = 0;
     memset(e->phone_keys, 0, sizeof(e->phone_keys));
+    memset(e->altgr_hidden, 0, sizeof(e->altgr_hidden));
+    e->altgr_active = false;
     e->phone_hid_mods = 0;
     e->hotkey_key_down = false;
     // (the keys Windows saw going down are tracked in `win_down`)
@@ -417,32 +423,52 @@ enter_phone(struct pe_edge *e, uint64_t now, float ratio,
             break;
     }
 
-    // Anchoring: enough full-scale reports to cross the whole screen even
-    // if Android moves the pointer less than expected; the pointer stops at
-    // the corner.
-    int longest = MAX_INT(w, h);
-    int reports = (int) ceilf((float) longest
-                              / ((float) PE_HID_MAX * cfg->pointer_scale))
-                + cfg->anchor_extra;
-    reports = MIN_INT(reports, PE_MAX_ANCHOR_REPORTS);
-    int sx = cx == 0 ? -PE_HID_MAX : PE_HID_MAX;
-    int sy = cy == 0 ? -PE_HID_MAX : PE_HID_MAX;
-    for (int i = 0; i < reports; ++i) {
-        struct pe_action *m = res_push(res, PE_ACT_PHONE_MOVE);
-        if (!m) {
-            break;
-        }
-        m->move.dx = (int8_t) sx;
-        m->move.dy = (int8_t) sy;
-        m->move.placement = true;
-        m->move.delay_ms = (uint16_t) cfg->place_delay_ms;
-    }
-    pe_vpos_set(&e->vpos, cx, cy);
+    // Where is the pointer now? After an entry that anchored it to a corner,
+    // its position is known (estimated); keep using that estimate for a while
+    // instead of sending it flying to a corner at every entry.
+    bool soft = e->anchored
+        && cfg->reanchor_entries > 0
+        && e->entries_since_anchor < cfg->reanchor_entries
+        && elapsed_ms(now, e->anchor_time)
+               < (uint64_t) cfg->reanchor_s * 1000;
+    float place_scale = cfg->place_scale;
 
-    // Positioning, in HID units
-    int ux = (int) lroundf((tx - cx) / cfg->pointer_scale);
-    int uy = (int) lroundf((ty - cy) / cfg->pointer_scale);
-    emit_motion(e, res, ux, uy, true, (uint16_t) cfg->place_delay_ms, false);
+    if (!soft) {
+        // Anchoring: enough full-scale reports to cross the whole screen even
+        // if Android moves the pointer less than expected; the pointer stops
+        // at the corner.
+        int longest = MAX_INT(w, h);
+        int reports = (int) ceilf((float) longest
+                                  / ((float) PE_HID_MAX * MIN_F(place_scale,
+                                         cfg->pointer_scale)))
+                    + cfg->anchor_extra;
+        reports = MIN_INT(reports, PE_MAX_ANCHOR_REPORTS);
+        int sx = cx == 0 ? -PE_HID_MAX : PE_HID_MAX;
+        int sy = cy == 0 ? -PE_HID_MAX : PE_HID_MAX;
+        for (int i = 0; i < reports; ++i) {
+            struct pe_action *m = res_push(res, PE_ACT_PHONE_MOVE);
+            if (!m) {
+                break;
+            }
+            m->move.dx = (int8_t) sx;
+            m->move.dy = (int8_t) sy;
+            m->move.placement = true;
+            m->move.delay_ms = (uint16_t) cfg->place_delay_ms;
+        }
+        pe_vpos_set(&e->vpos, cx, cy);
+        e->anchored = true;
+        e->anchor_time = now;
+        e->entries_since_anchor = 0;
+    } else {
+        ++e->entries_since_anchor;
+    }
+
+    // Positioning from the current estimate, in HID units, at full speed
+    // (constant gain: `place_scale`)
+    int ux = (int) lroundf((tx - e->vpos.x) / place_scale);
+    int uy = (int) lroundf((ty - e->vpos.y) / place_scale);
+    emit_motion(e, res, ux, uy, true, (uint16_t) cfg->place_delay_ms, false,
+                place_scale);
 }
 
 static bool
@@ -612,6 +638,99 @@ phys_hid_mods(const struct pe_edge *e) {
     return mods;
 }
 
+static void
+send_key(struct pe_edge *e, uint64_t now, struct pe_result *res, uint8_t sc,
+         bool down) {
+    e->phone_keys[sc] = down;
+    uint8_t bit = pe_keymap_hid_mod_bit(sc);
+    if (bit) {
+        if (down) {
+            e->phone_hid_mods |= bit;
+        } else {
+            e->phone_hid_mods &= (uint8_t) ~bit;
+        }
+    }
+
+    flush_pending(e, now, res, true);
+    struct pe_action *a = res_push(res, PE_ACT_PHONE_KEY);
+    if (a) {
+        a->key.scancode = sc;
+        a->key.down = down;
+        a->key.mods = phone_mods(e);
+    }
+}
+
+#define SC_LCTRL 0xE0
+#define SC_LALT 0xE2
+#define SC_RCTRL 0xE4
+#define SC_RALT 0xE6
+
+static bool
+is_ctrl(uint8_t sc) {
+    return sc == SC_LCTRL || sc == SC_RCTRL;
+}
+
+// Send a key to the phone. On Windows layouts with AltGr (ABNT2...), Ctrl+Alt
+// is AltGr: Android only knows the real right Alt for it, so translate.
+static void
+forward_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
+            struct pe_result *res) {
+    if (!e->cfg.altgr) {
+        send_key(e, now, res, sc, down);
+        return;
+    }
+
+    if (e->altgr_active) {
+        if (is_ctrl(sc)) {
+            e->altgr_hidden[sc] = down;
+            return;
+        }
+        if (sc == SC_LALT) {
+            if (!down) {
+                // AltGr released: release it, and press again the Ctrl keys
+                // that are still held (they were hidden)
+                e->altgr_hidden[SC_LALT] = false;
+                e->altgr_active = false;
+                send_key(e, now, res, SC_RALT, false);
+                for (uint8_t c = SC_LCTRL; c <= SC_RCTRL; c += 4) {
+                    if (e->altgr_hidden[c]) {
+                        e->altgr_hidden[c] = false;
+                        send_key(e, now, res, c, true);
+                    }
+                }
+            }
+            return;
+        }
+        send_key(e, now, res, sc, down);
+        return;
+    }
+
+    bool ctrl_held = e->phone_keys[SC_LCTRL] || e->phone_keys[SC_RCTRL];
+    if (down && sc == SC_LALT && ctrl_held) {
+        // Ctrl held, then Alt: Ctrl is not sent anymore, AltGr is
+        for (uint8_t c = SC_LCTRL; c <= SC_RCTRL; c += 4) {
+            if (e->phone_keys[c]) {
+                send_key(e, now, res, c, false);
+                e->altgr_hidden[c] = true;
+            }
+        }
+        e->altgr_hidden[SC_LALT] = true;
+        e->altgr_active = true;
+        send_key(e, now, res, SC_RALT, true);
+        return;
+    }
+    if (down && is_ctrl(sc) && e->phone_keys[SC_LALT]) {
+        // Alt held, then Ctrl
+        send_key(e, now, res, SC_LALT, false);
+        e->altgr_hidden[SC_LALT] = true;
+        e->altgr_hidden[sc] = true;
+        e->altgr_active = true;
+        send_key(e, now, res, SC_RALT, true);
+        return;
+    }
+    send_key(e, now, res, sc, down);
+}
+
 // The core of pe_edge_on_key(): decide about one key event. The caller records
 // what Windows will see.
 static void
@@ -681,33 +800,17 @@ handle_key(struct pe_edge *e, uint64_t now, uint8_t sc, bool down,
     res->swallow = true;
     if (!down) {
         e->swallowed_until_up[sc] = false;
-        if (!e->phone_keys[sc]) {
+        if (!e->phone_keys[sc] && !e->altgr_hidden[sc]) {
             return;
         }
     } else {
         e->swallowed_until_up[sc] = true;
-        if (repeat || e->phone_keys[sc]) {
+        if (repeat || e->phone_keys[sc] || e->altgr_hidden[sc]) {
             return;
         }
     }
 
-    e->phone_keys[sc] = down;
-    uint8_t bit = pe_keymap_hid_mod_bit(sc);
-    if (bit) {
-        if (down) {
-            e->phone_hid_mods |= bit;
-        } else {
-            e->phone_hid_mods &= (uint8_t) ~bit;
-        }
-    }
-
-    flush_pending(e, now, res, true);
-    struct pe_action *a = res_push(res, PE_ACT_PHONE_KEY);
-    if (a) {
-        a->key.scancode = sc;
-        a->key.down = down;
-        a->key.mods = phone_mods(e);
-    }
+    forward_key(e, now, sc, down, res);
 }
 
 void

@@ -43,6 +43,15 @@ struct pe_app {
     bool lifecycle_initialized;
     bool running;
 
+    // Android settings changed while running (restored on exit)
+    struct sc_intr *adb_intr;
+    char *adb_serial;
+    struct {
+        const char *key;
+        char *original; // NULL: the setting did not exist
+        bool changed;
+    } android_settings[2];
+
     bool sender_initialized;
     bool sender_started;
     bool session_initialized;

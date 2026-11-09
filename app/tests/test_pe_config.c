@@ -210,6 +210,33 @@ static void test_ini_long_comment_lines(void) {
     assert(strstr(err, "too long"));
 }
 
+static void test_new_settings(void) {
+    struct pe_config c;
+    pe_config_defaults(&c);
+    char err[128];
+    assert(c.place_scale == 3.0f && c.altgr && !c.android_accel_off);
+    assert(c.android_pointer_speed == PE_POINTER_SPEED_KEEP);
+    assert(c.entry_inset == 60 && c.leave_margin == 100);
+
+    assert(pe_config_set(&c, "place_scale", "1.5", err, sizeof(err)) == PE_SET_OK);
+    assert(c.place_scale == 1.5f);
+    assert(pe_config_set(&c, "place_scale", "0.1", err, sizeof(err))
+           == PE_SET_INVALID_VALUE);
+    assert(pe_config_set(&c, "altgr", "no", err, sizeof(err)) == PE_SET_OK);
+    assert(!c.altgr);
+    assert(pe_config_set(&c, "android-accel-off", "yes", err, sizeof(err)) == PE_SET_OK);
+    assert(c.android_accel_off);
+    assert(pe_config_set(&c, "android_pointer_speed", "-3", err, sizeof(err)) == PE_SET_OK);
+    assert(c.android_pointer_speed == -3);
+    assert(pe_config_set(&c, "android_pointer_speed", "keep", err, sizeof(err)) == PE_SET_OK);
+    assert(c.android_pointer_speed == PE_POINTER_SPEED_KEEP);
+    assert(pe_config_set(&c, "android_pointer_speed", "9", err, sizeof(err))
+           == PE_SET_INVALID_VALUE);
+    assert(pe_config_set(&c, "reanchor_entries", "0", err, sizeof(err)) == PE_SET_OK);
+    assert(pe_config_set(&c, "reanchor_s", "30", err, sizeof(err)) == PE_SET_OK);
+    assert(c.reanchor_s == 30);
+}
+
 static void test_oriented_size(void) {
     struct pe_config c;
     pe_config_defaults(&c);
@@ -245,6 +272,7 @@ int main(int argc, char *argv[]) {
     test_ini();
     test_ini_errors();
     test_ini_long_comment_lines();
+    test_new_settings();
     test_oriented_size();
     test_sides();
     return 0;

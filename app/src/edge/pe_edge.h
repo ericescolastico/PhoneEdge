@@ -138,6 +138,9 @@ struct pe_edge {
     uint64_t leave_time;
     bool has_left; // leave_time is valid
     float leave_push; // consecutive px pushed against the opposite edge
+    bool anchored;    // vpos was anchored to a corner at anchor_time
+    uint64_t anchor_time;
+    int entries_since_anchor;
 
     // PC side
     float edge_push_acc;
@@ -155,6 +158,10 @@ struct pe_edge {
     uint8_t phone_buttons;
     bool phone_keys[256];
     uint8_t phone_hid_mods;
+    // Ctrl+Alt translated to AltGr (right Alt) on the phone: the physical
+    // Ctrl/Alt keys held meanwhile are not sent
+    bool altgr_active;
+    bool altgr_hidden[256];
     bool hotkey_key_down; // the key of the hotkey is down (swallow its up)
 
     // Pending motion, not yet sent (HID units), flushed every flush_ms
