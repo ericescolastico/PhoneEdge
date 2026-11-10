@@ -2,12 +2,24 @@ name: Build
 
 # - every push / pull request: unit tests (Linux) + Windows build, packaged as an artifact
 # - tag v*: the same zip is published as a GitHub Release
+# - manual run (workflow_dispatch) with release_tag set: builds release_target,
+#   then creates that tag on the exact commit that was built and publishes the
+#   release (for when pushing a tag is not possible)
 on:
   push:
     branches: ['**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag do release a criar (ex.: v0.1.1). Vazio = só compila.'
+        required: false
+        default: ''
+      release_target:
+        description: 'Branch ou commit a compilar e marcar com a tag'
+        required: false
+        default: 'master'
 
 permissions:
   contents: read
@@ -26,6 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag && inputs.release_target || '' }}
 
       - name: Cache SDL3
         id: cache-sdl
@@ -72,11 +86,15 @@ jobs:
   build-windows:
     name: Windows x64 build and package
     runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.built.outputs.sha }}
     defaults:
       run:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag && inputs.release_target || '' }}
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -112,9 +130,17 @@ jobs:
           echo "$SCRCPY_WIN64_ZIP_SHA256  scrcpy-win64.zip" | sha256sum -c -
           unzip -q scrcpy-win64.zip -d upstream
 
+      - name: Commit being built
+        id: built
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Package
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          name="PhoneEdge-${GITHUB_REF_NAME//\//-}-win64"
+          label="${RELEASE_TAG:-$GITHUB_REF_NAME}"
+          name="PhoneEdge-${label//\//-}-win64"
           rm -rf dist && mkdir -p "dist/$name"
           cp build/app/phoneedge.exe "dist/$name/"
           cp scrcpy-server "dist/$name/scrcpy-server"
@@ -147,7 +173,9 @@ jobs:
 
   release:
     name: Publish the GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v'))
     needs: [test-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
@@ -160,9 +188,16 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          BUILT_SHA: ${{ needs.build-windows.outputs.sha }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+          tag="${RELEASE_TAG:-$GITHUB_REF_NAME}"
+          target=()
+          # manual run: the tag does not exist yet; create it on the commit that was built
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then target=(--target "$BUILT_SHA"); fi
+          gh release create "$tag" dist/*.zip \
             --repo "$GITHUB_REPOSITORY" \
-            --title "PhoneEdge $GITHUB_REF_NAME" \
+            --title "PhoneEdge $tag" \
             --notes "Protótipo do PhoneEdge. Veja o README.md dentro do zip para o passo a passo de teste no Windows + Galaxy S22." \
-            --prerelease
+            --prerelease \
+            "${target[@]}"
